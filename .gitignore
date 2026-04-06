@@ -1,0 +1,15 @@
+# Ignore those specific data/version files
+--versio*
+--version*
+
+# Python specific ignores
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+.env
+
+# Build files
+dist/
+build/
