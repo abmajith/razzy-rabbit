@@ -35,3 +35,7 @@ class RazzyToolbar(QtWidgets.QToolBar):
         menu.addAction("⚖️ Apply Force/Load", lambda: self.main_win.trigger_selection("load"))
         btn.setMenu(menu)
         self.addWidget(btn)
+
+        menu.addSeparator()
+        solve_action = menu.addAction("🚀 Run CalculiX Solve")
+        solve_action.triggered.connect(self.main_win.run_fea)

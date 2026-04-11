@@ -4,6 +4,7 @@
 
 # Python specific ignores
 __pycache__/
+src/razzy_rabbit/__pycache__/
 *.py[cod]
 *$py.class
 .venv/

@@ -1,8 +1,10 @@
-from PyQt6 import QtWidgets, QtCore  # Import QtCore directly here
+import os
+from PyQt6 import QtWidgets, QtCore
 from razzy_rabbit.gui.workspace import RazzyWorkspace
 from razzy_rabbit.gui.toolbar import RazzyToolbar
 from razzy_rabbit.gui.side_panel import RazzySidePanel
 from razzy_rabbit.core.mesh_engine import generate_tetra_mesh
+from razzy_rabbit.core.fea_solver import FEASolver
 
 class RazzyGuiLauncher(QtWidgets.QMainWindow):
     def __init__(self):
@@ -61,3 +63,22 @@ class RazzyGuiLauncher(QtWidgets.QMainWindow):
     def _close_tab(self, index):
         self.tabs.widget(index).plotter.close()
         self.tabs.removeTab(index)
+
+    def run_fea(self):
+        ws = self.get_current_ws()
+        if not ws or not ws.volume_mesh:
+            print("Error: Mesh the part with GMSH first!")
+            return
+
+        solver = FEASolver(ws)
+        
+        # 1. Run the Math
+        result_path = solver.run_analysis(ws.volume_mesh, ws.selected_faces)
+        
+        # 2. If it worked, show the heatmap
+        if result_path and os.path.exists(result_path):
+            print(f"Success! Visualizing: {result_path}")
+            ws.display_results(result_path)
+        else:
+            print("Solver did not produce a result file.")
+    

@@ -9,6 +9,12 @@ dependencies = [
     "PyQt6",
     "numpy",
     "gmsh>=4.15.2",
+    "scipy>=1.15.3",
+    "meshio>=5.3.5",
+    "trimesh>=4.11.5",
+    "manifold3d>=3.4.1",
+    "pytest>=9.0.2",
+    "pytest-qt>=4.5.0",
 ]
 
 [build-system]
