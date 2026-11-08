@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests + C++ build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System packages (CalculiX, GL runtime libs)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            calculix-ccx libgl1 libegl1 libglu1-mesa libxrender1 cmake g++
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Python environment (locked)
+        run: uv sync --extra sim --locked
+
+      - name: Tests (FEA core + simulation scenes)
+        # tests/gui needs a display and currently has a known failing assertion; run locally
+        run: uv run --extra sim pytest -q tests/core tests/sim
+
+      - name: Build C++ batched rollout
+        run: |
+          cmake -S sim/cpp -B sim/cpp/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build sim/cpp/build -j
+
+      - name: C++ smoke run on generated scenes
+        run: |
+          for s in crop_rover greenhouse orchard_uav; do
+            sim/cpp/build/batch_rollout sim/generated/$s-s0/scene.xml 8 2 500
+          done
