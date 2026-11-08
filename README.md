@@ -57,6 +57,56 @@ QT_QPA_PLATFORM=xcb DRI_PRIME=1 uv run python -m razzy_rabbit
     - Left-Click an existing square to Unselect it.
     - Solve: The suite translates these markers into a CalculiX .inp file to solve the [K]u=f equilibrium equation.
 
+## 🌾 Simulation Environments (`sim/`)
+
+Procedural, reproducible MuJoCo environments for field robotics (UAVs, agricultural rovers,
+greenhouse harvesting), each with a reference controller already running. Scenes are
+generated as plain MJCF, so the same files load from Python and from C/C++.
+
+| scene | robot |
+|---|---|
+| `orchard_uav` | quadrotor flying the alleys of an apple orchard on rolling hills |
+| `crop_rover` | high-clearance weeding rover following lettuce beds with furrows and weeds |
+| `forest_trail` | quadrotor following a hiking trail through steep mixed forest |
+| `greenhouse` | pipe-rail trolley with an arm picking ripe tomatoes into a crate |
+| `wind_turbine` | quadrotor inspecting a spinning turbine in a potential-flow wind field |
+| `pond_survey` | example developer scene (`sim/custom/`): quadrotor orbiting a pond |
+
+### Install
+```bash
+uv sync --extra sim            # adds mujoco + imageio on top of the base environment
+```
+
+### Run
+```bash
+uv run --extra sim python -m sim list                          # show all scenes
+uv run --extra sim python -m sim view greenhouse               # interactive 3D viewer
+uv run --extra sim python -m sim view wind_turbine --wind      # + wind-field arrows
+uv run --extra sim python -m sim view crop_rover --seed 7 --rebuild   # another random variant
+uv run --extra sim python -m sim render forest_trail --seconds 30     # headless MP4 + PNG
+uv run --extra sim python -m sim build all --seed 3            # just generate assets
+```
+
+- Output goes to `sim/generated/<scene>-s<seed>/` (git-ignored). The same seed always gives
+  identical files.
+- In the viewer, the **Camera** menu has onboard cameras (`*_fpv`, `*_nadir`, `*_bedcam`,
+  `*_wristcam`) and `overview`. Geom group 3 shows the invisible colliders.
+- The discrete GPU is selected automatically (here the Intel Arc rather than the AMD iGPU).
+  Override with `RAZZY_GPU=igpu`. Add `--hq` to `view` for full shadow quality.
+
+### C++ batched rollouts
+```bash
+cmake -S sim/cpp -B sim/cpp/build && cmake --build sim/cpp/build -j
+sim/cpp/build/batch_rollout sim/generated/crop_rover-s0/scene.xml 128 32 1000
+```
+
+### Writing your own scene
+Drop a file into `sim/custom/` and it's picked up automatically. Start from
+[`sim/custom/pond_survey.py`](sim/custom/pond_survey.py) and follow
+**[docs/custom_scenes.md](docs/custom_scenes.md)** (builder API, terrain, vegetation, robots,
+custom controllers, wind, conventions, checklist). Internals and benchmarks:
+[sim/README.md](sim/README.md).
+
 #### 🗺 Future Directions
 - Post-Processing: Automated displacement and Von Mises Stress visualization directly in the 3D viewport.
 

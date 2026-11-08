@@ -14,3 +14,4 @@ env/
 # Build files
 dist/
 build/
+sim/generated/
