@@ -60,6 +60,7 @@ sim/
   runtime.py   Sim wrapper: load, step with controller + wind drag, draw wind arrows
   design/      vehicle sizing: configs/*.toml, drone.py, rover.py (optimiser + generator), plant.py
   sensing/     sensor/latency/compute models, scene coupling (GNSS sky view), Allan/FFT analysis
+  uncertainty.py  [uncertainty] ranges -> per-episode vehicle variants (Sim.reset(variant))
   gpu.py       picks the discrete GPU for viewer (DRI_PRIME) and headless EGL
   custom/      developer scenes + controllers, auto-loaded (pond_survey.py example)
   cpp/         C++ batched rollout benchmark against the same scene.xml

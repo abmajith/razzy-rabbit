@@ -364,4 +364,5 @@ def to_mjcf(b, name: str, pos, design: DroneDesign, cfg: dict, chase_offset=(-3.
                                arm_hz=m["arm_freq_hz"], arm_zeta=inst.get("arm_zeta", 0.02),
                                mount_hz=inst.get("imu_mount_hz", 1e4), mount_zeta=inst.get("imu_mount_zeta", 0.15)))
     b.meta.setdefault("robots", []).append(meta)
+    b.meta["uncertainty"] = dict(cfg.get("uncertainty", {}))   # drawn per episode by Sim(variant=k)
     return meta

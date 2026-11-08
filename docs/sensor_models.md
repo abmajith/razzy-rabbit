@@ -22,7 +22,7 @@ numbers and the way the parts are mounted.
 | **installation** | `[installation]`: soft mount, prop balance, antenna height, wiring | **this step** |
 | **site** | `[environment]`: Earth magnetic field | **this step** |
 | **compute** | `[compute]`: where the policy runs → `[compute.*]` | **this step** |
-| uncertainty ranges (domain randomisation) | planned `[uncertainty]` | next step |
+| uncertainty ranges (domain randomisation) | `[uncertainty]` | see [uncertainty.md](uncertainty.md) |
 
 The generator (`to_mjcf`) merges these into the scene's `meta.json`, so each generated
 scene carries its full sensor spec. `Sim` then builds a `SensorSuite` automatically.
@@ -168,8 +168,8 @@ with like.
 | inference time | run your network on the real board, histogram the times | `[compute.*] inference_ms` |
 
 When a simulated report matches the real one for the same manoeuvre, that sensor's gap is
-closed. Whatever uncertainty remains becomes the domain-randomisation range in the next
-step.
+closed. Whatever uncertainty remains becomes the domain-randomisation range in
+`[uncertainty]` (see [uncertainty.md](uncertainty.md)).
 
 ## Limits
 

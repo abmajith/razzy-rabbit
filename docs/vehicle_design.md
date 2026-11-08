@@ -158,3 +158,8 @@ P_bus = 4·V·I / η_esc + P_avionics     drawn from the battery
 Sensors, their mounting, the site's magnetic field and the policy computer are chosen in
 the same mission file (`[sensors]`, `[installation]`, `[environment]`, `[compute]`). See
 [sensor_models.md](sensor_models.md).
+
+## Uncertainty
+
+How well each number is known, and per-episode vehicle variants drawn from it:
+`[uncertainty]` in the same mission file. See [uncertainty.md](uncertainty.md).

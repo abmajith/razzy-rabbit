@@ -29,34 +29,71 @@ def load_terrain(meta: dict, folder) -> Terrain | None:
 
 
 class Sim:
+    """A generated scene with its controller, plant, sensors and wind.
+
+    variant=None runs the nominal vehicle. variant=k draws vehicle k from the mission's
+    [uncertainty] ranges (deterministic per (seed, k)); reset(k) switches variants without
+    reloading the scene.
+    """
+
     def __init__(self, name: str, seed: int = 0, rebuild: bool = False, controller: bool = True,
-                 sensors: bool = True, record: bool = False) -> None:
+                 sensors: bool = True, record: bool = False, variant: int | None = None) -> None:
         folder = scene_dir(name, seed)
         if rebuild or not (folder / "scene.xml").exists():
             from .scenes import build
             print(f"[sim] generating {name} (seed {seed}) ...", flush=True)
             build(name, seed)
-        self.folder = folder
+        self.folder, self.seed = folder, seed
+        self.use_controller, self.use_sensors, self.record = controller, sensors, record
         self.m = mujoco.MjModel.from_xml_path(str(folder / "scene.xml"))
         self.d = mujoco.MjData(self.m)
-        self.meta = json.loads((folder / "meta.json").read_text())
-        self.terrain = load_terrain(self.meta, folder)
-        self.wind = WindField(self.meta["wind"], self.terrain, seed) if "wind" in self.meta else None
-        mujoco.mj_forward(self.m, self.d)
+        self.meta0 = json.loads((folder / "meta.json").read_text())
+        self.terrain = load_terrain(self.meta0, folder)
+        from .uncertainty import ModelSnapshot
+        self._nominal = ModelSnapshot(self.m)
+        self.reset(variant)
+
+    def reset(self, variant: int | None = None) -> None:
+        from . import uncertainty as U
+        m, d = self.m, self.d
+        self._nominal.restore(m)
+        mujoco.mj_setConst(m, d)
+        mujoco.mj_resetData(m, d)
+        self.variant, self.params, self.rejected = variant, {}, 0
+        robot0 = self.meta0["robots"][0] if self.meta0.get("robots") else {}
+        unc = self.meta0.get("uncertainty", {})
+        if variant is not None:
+            if not unc:
+                raise SystemExit("this scene has no [uncertainty] spec (designed vehicles only)")
+            rng = np.random.default_rng([self.seed, 0xD0A1, variant])
+            self.params, self.rejected = U.sample(unc, robot0, rng)
+        self.meta = U.apply_meta(self.meta0, self.params) if self.params else self.meta0
+        self.wind = WindField(self.meta["wind"], self.terrain, self.seed) if "wind" in self.meta else None
+        mujoco.mj_forward(m, d)
+        # controllers are built against the NOMINAL model (what the designer knows) ...
         self.ctrls = []
-        if controller and self.meta.get("controller") in CONTROLLERS:
+        if self.use_controller and self.meta.get("controller") in CONTROLLERS:
             self.ctrls.append(CONTROLLERS[self.meta["controller"]](self, self.meta))
         if "rotor_speed" in self.meta:
             self.ctrls.append(TurbineSpin(self, self.meta))
+        # ... the physics gets the drawn vehicle
+        if self.params:
+            U.apply_model(m, d, self.robot, self.params)
+            mujoco.mj_forward(m, d)
         self.plant = None
         if "plant" in self.robot:          # designed vehicle: battery + motor model, runs last
             from .design.plant import make_plant
             self.plant = make_plant(self, self.robot)
             self.ctrls.append(self.plant)
         self.sensors = None
-        if sensors and "sensors" in self.robot:   # grounded sensor models, sampled after each step
+        if self.use_sensors and "sensors" in self.robot:   # grounded sensor models, sampled after each step
             from .sensing.suite import SensorSuite
-            self.sensors = SensorSuite(self, self.robot, seed, record=record)
+            noise_seed = self.seed if variant is None else self.seed + 1_000_003 * (variant + 1)
+            self.sensors = SensorSuite(self, self.robot, noise_seed, record=self.record)
+
+    def param_vector(self) -> tuple[list[str], np.ndarray]:
+        from .uncertainty import flatten
+        return flatten(self.params)
 
     @property
     def robot(self) -> dict:

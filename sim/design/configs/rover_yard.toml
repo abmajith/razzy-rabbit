@@ -51,3 +51,22 @@ gnss_antenna_height_m = 0.35
 field_ut = 47.5
 inclination_deg = 62
 declination_deg = 2.5
+
+[uncertainty]
+# See drone_forest.toml / docs/uncertainty.md. a -> factor 1±a ; [lo, hi] -> range.
+mass_frac = 0.08            # payload not exactly 3 kg
+inertia_frac = 0.15
+com_offset_mm = [30, 20]    # payload placement
+drive_torque = 0.10         # gearmotor batch, temperature
+drive_gain = 0.05           # per motor
+steer_kp = 0.20
+battery_capacity = [0.85, 1.0]
+battery_resistance = [0.9, 1.6]
+imu_noise = [0.9, 1.5]
+imu_bias = [0.5, 2.0]
+mag_current = [0.5, 2.0]
+gnss_multipath = [0.5, 1.5]
+latency_ms_add = [0, 15]
+friction = 0.25             # soil / rock surface
+require_slope_torque_frac = 0.8
+require_tip_deg = 25

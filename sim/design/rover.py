@@ -326,4 +326,5 @@ def to_mjcf(b, name: str, pos, design: RoverDesign, cfg: dict, yaw: float = 0.0)
     from ..sensing.suite import resolve
     meta["sensors"] = resolve(cfg, db)
     b.meta.setdefault("robots", []).append(meta)
+    b.meta["uncertainty"] = dict(cfg.get("uncertainty", {}))   # drawn per episode by Sim(variant=k)
     return meta

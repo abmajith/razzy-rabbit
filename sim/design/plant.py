@@ -60,7 +60,7 @@ class RoverPlant:
         self.v_nom = self.pack.v_nom
         mot = p["motor"]
         self.i0, self.i_s = mot["no_load_current"], mot["stall_current"] * p["v_ratio"]
-        self.tau_s = p["tau_stall"]
+        self.tau_s = np.asarray(p["tau_stall"], float)   # per motor when randomised
         self.soc, self.v, self.i, self.power = 1.0, self.pack.ocv(1.0), 0.0, 0.0
         self.energy_wh = 0.0
         self.n_servo = len(robot["steer"])

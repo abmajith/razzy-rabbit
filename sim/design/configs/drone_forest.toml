@@ -63,3 +63,38 @@ declination_deg = 2.5
 
 [compute]
 part = "oakd_myriadx"         # where the policy runs (components.toml [compute.*])
+
+[uncertainty]
+# How well do we know each number? Sim(variant=k) / `python -m sim randomize` draws one
+# plausible vehicle per episode, uniformly within these ranges (see sim/uncertainty.py).
+# a -> factor 1±a ; [lo, hi] -> explicit range. Narrow a range once you've MEASURED it.
+mass_frac = 0.04            # guess: wiring, glue, screws vs the parts list
+inertia_frac = 0.10         # guess: lumped-part inertia model
+com_offset_mm = [6, 4]      # guess: battery strap position (xy radius, z half-range)
+thrust_coef = 0.08          # datasheet-ish: prop batch, air density, prop wear
+motor_gain = 0.03           # guess: motor/ESC/prop mismatch between the four rotors
+yaw_coef = 0.15             # guess
+motor_lag = 0.30            # model: tau from linearised motor + ESC, unmeasured
+rotor_drag = 0.40           # guess
+body_drag = 0.30            # guess
+prop_imbalance = [0.5, 3.0] # guess: chipped / rebalanced props
+imu_mount_hz = 0.25         # guess: rubber grommets vary a lot
+arm_hz = 0.15               # model: Euler-Bernoulli beam vs real joint stiffness
+battery_capacity = [0.85, 1.0]   # ageing and cold only reduce it
+battery_resistance = [0.9, 1.6]
+imu_noise = [0.9, 1.5]      # datasheet is typical; units vary
+imu_bias = [0.5, 2.0]
+baro_noise = [0.8, 1.5]
+baro_drift = [0.5, 2.0]
+mag_current = [0.5, 2.0]
+gnss_foliage = [0.3, 0.7]   # unknown until a static test under this canopy
+gnss_multipath = [0.5, 1.5]
+latency_ms_add = [0, 15]    # USB / scheduling jitter beyond the datasheet
+compute_ms_add = [0, 20]
+wind_speed = [0.0, 4.0]
+wind_heading_deg = [0, 360]
+gust = [0.5, 1.5]
+friction = 0.2
+# feasibility: a draw outside these would not be a flyable build -> redrawn
+require_twr_end = 1.8
+require_hover_throttle = 0.6
