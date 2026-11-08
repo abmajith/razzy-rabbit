@@ -1,4 +1,5 @@
-"""Procedural vegetation & props, written into merged mesh batches.
+"""Procedural vegetation & props geometry (one tree, one rock...), written into merged mesh
+batches. World features (world/features/) decide *where* these go.
 
 Visual geometry goes into Builder mesh batches (no collision). Where a robot can hit
 something (trunks, logs, rocks), a cheap primitive collision geom is added separately.
@@ -7,26 +8,42 @@ from __future__ import annotations
 
 import numpy as np
 
-from .builder import Builder, fmt
-from .mesh import rot_x, rot_y, rot_z
+from ..builder import Builder, fmt
+from ..mesh import rot_x, rot_y, rot_z
 
 
-def plant_materials(b: Builder, rng: np.random.Generator) -> None:
-    j = lambda c, s=0.06: np.clip(np.asarray(c) + rng.uniform(-s, s, 3) * np.array([0.5, 1, 0.5]), 0, 1)
-    b.material("bark", [*j([0.30, 0.22, 0.15], 0.04), 1], specular=0.02)
-    b.material("bark_birch", [0.82, 0.80, 0.74, 1], specular=0.05)
-    b.material("leaf_a", [*j([0.20, 0.42, 0.13]), 1], specular=0.15, shininess=0.2)
-    b.material("leaf_b", [*j([0.28, 0.50, 0.16]), 1], specular=0.15, shininess=0.2)
-    b.material("leaf_c", [*j([0.14, 0.30, 0.10]), 1], specular=0.1)
-    b.material("conifer", [*j([0.09, 0.24, 0.12], 0.03), 1], specular=0.05)
-    b.material("conifer_b", [*j([0.12, 0.30, 0.15], 0.03), 1], specular=0.05)
-    b.material("lettuce", [*j([0.42, 0.70, 0.22]), 1], specular=0.3, shininess=0.4)
-    b.material("lettuce_dark", [*j([0.25, 0.52, 0.16]), 1], specular=0.3, shininess=0.4)
-    b.material("weed", [*j([0.45, 0.55, 0.12]), 1], specular=0.1)
-    b.material("apple", [0.75, 0.10, 0.08, 1], specular=0.6, shininess=0.7)
-    b.material("rock", [0.48, 0.46, 0.43, 1], specular=0.1)
-    b.material("grass_tuft", [*j([0.35, 0.50, 0.18]), 1], specular=0.05)
-    b.material("dry_grass", [0.62, 0.58, 0.36, 1], specular=0.05)
+# name: (base rgb, jitter amplitude or None, material options). The order matters for the
+# seeded jitter: PlantColours draws the jitter of these, in this order.
+MATERIALS = {
+    "bark":         ([0.30, 0.22, 0.15], 0.04, dict(specular=0.02)),
+    "bark_birch":   ([0.82, 0.80, 0.74], None, dict(specular=0.05)),
+    "leaf_a":       ([0.20, 0.42, 0.13], 0.06, dict(specular=0.15, shininess=0.2)),
+    "leaf_b":       ([0.28, 0.50, 0.16], 0.06, dict(specular=0.15, shininess=0.2)),
+    "leaf_c":       ([0.14, 0.30, 0.10], 0.06, dict(specular=0.1)),
+    "conifer":      ([0.09, 0.24, 0.12], 0.03, dict(specular=0.05)),
+    "conifer_b":    ([0.12, 0.30, 0.15], 0.03, dict(specular=0.05)),
+    "lettuce":      ([0.42, 0.70, 0.22], 0.06, dict(specular=0.3, shininess=0.4)),
+    "lettuce_dark": ([0.25, 0.52, 0.16], 0.06, dict(specular=0.3, shininess=0.4)),
+    "weed":         ([0.45, 0.55, 0.12], 0.06, dict(specular=0.1)),
+    "apple":        ([0.75, 0.10, 0.08], None, dict(specular=0.6, shininess=0.7)),
+    "rock":         ([0.48, 0.46, 0.43], None, dict(specular=0.1)),
+    "grass_tuft":   ([0.35, 0.50, 0.18], 0.06, dict(specular=0.05)),
+    "dry_grass":    ([0.62, 0.58, 0.36], None, dict(specular=0.05)),
+}
+TREE_MATERIALS = ("bark", "bark_birch", "leaf_a", "leaf_b", "leaf_c", "conifer", "conifer_b")
+GRASS_MATERIALS = ("grass_tuft", "dry_grass")
+
+
+def plant_materials(b: Builder, rng: np.random.Generator | None = None, names=None) -> None:
+    """Register vegetation materials (all, or only `names`). With an rng each colour is
+    jittered (seeded variation, all materials, fixed order); without one the base colours are
+    used. Materials already registered are kept."""
+    for name, (rgb, jitter, opts) in MATERIALS.items():
+        c = np.asarray(rgb, float)
+        if rng is not None and jitter is not None:
+            c = np.clip(c + rng.uniform(-jitter, jitter, 3) * np.array([0.5, 1, 0.5]), 0, 1)
+        if names is None or name in names:
+            b.material(name, [*c, 1], **opts)
 
 
 # ---------------------------------------------------------------------------- trees ---

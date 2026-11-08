@@ -19,11 +19,11 @@ sim/
   design/      vehicle sizing: configs/*.toml (missions), drone.py, rover.py
   sensing/     sensor error models (models.py), Allan/FFT analysis (analysis.py)
   uncertainty.py  [uncertainty] ranges -> per-episode vehicle variants
-  terrain.py   fBm heightfields (MuJoCo binary .bin) + matching ground textures
   mesh.py      low-poly primitives merged into one OBJ per material
-  flora.py     trees, conifers, birches, grass, rocks, logs
   builder.py   assembles scene.xml + meta.json, sky, sun, lighting, shared robot materials
-  scenes.py    the grounded scenes: forest_grounded, mars_yard
+  world/       World + features (Hills, Craters, Trail, DriveLoop, Ground, Forest, Grass,
+               Rocks, Logs, Lander, Sun, Wind); terrain.py, flora.py, sampling.py   [step 5]
+  scenes.py    the grounded scenes as compositions: forest_grounded, mars_yard
   control.py   SE(3) quadrotor control + waypoint mission, Ackermann pure pursuit
   runtime/     Python reference engine: sim.py (step loop), power.py (generic power train),
                aero.py (rotor drag), sensors.py (sensor runtime, GNSS sky view)    [step 4]
