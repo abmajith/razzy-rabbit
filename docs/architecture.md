@@ -232,6 +232,21 @@ def forest_inspection(seed=0):
     return Scene(world, robot, task, uncertainty="drone_forest.toml")
 ```
 
+**Describing a scene is not running it.** A scene file is only *read once* to build the
+scene. It places the terrain features, assembles the robot and writes `scene.xml` plus
+`meta.json`; that takes seconds, before any simulation starts. Everything that runs
+afterwards (viewer, render, sensor reports, training) is the C++ core loading those files.
+Like a compiler: the scene file is the source code, `scene.xml` + `meta.json` the compiled
+program, and the C++ core the machine that executes it. Writing scenes in Python therefore
+costs no run-time speed. The open question "Python or a data format" (section 9) is only
+about which notation is more convenient for describing scenes.
+
+```
+ describe (once)             build (once, seconds)        run (millions of steps, C++)
+ scenes/<name>.py   ──────►  scene.xml + meta.json  ────►  physics, control, battery,
+                                                           sensors -> view / render / train
+```
+
 Only the two grounded scenes are kept: `forest_grounded` (renamed `forest_inspection`)
 and `mars_yard`. Each should shrink to roughly 10–30 lines.
 
