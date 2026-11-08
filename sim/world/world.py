@@ -87,6 +87,22 @@ class World:
         """[x, y, z] on the ground (+ clearance), e.g. a robot's start position."""
         return [float(x), float(y), self.height(x, y) + clearance]
 
+    def add_robot(self, robot, x: float, y: float, clearance: float = 0.1, yaw: float | None = None,
+                  control=None, drag_CdA: float | None = None, uncertainty: dict | None = None) -> dict:
+        """Put a Robot on the ground at (x, y) (+ clearance), with its controller chain, body
+        drag area [m^2] and [uncertainty] ranges; writes it and its meta into the scene."""
+        b = self.builder
+        robot.environment.setdefault("air_density", 1.225)
+        robot.write(b, self.ground_point(x, y, clearance), yaw=yaw)
+        extra = {} if drag_CdA is None else {"drag_CdA": drag_CdA}
+        meta = robot.meta(**extra)
+        b.meta.setdefault("robots", []).append(meta)
+        if control is not None:
+            b.meta["control"] = control.spec()
+        if uncertainty is not None:
+            b.meta["uncertainty"] = dict(uncertainty)
+        return meta
+
     def overview(self, pos, target) -> None:
         """Fixed camera named `overview` looking at `target`."""
         self.builder.overview(pos, target)

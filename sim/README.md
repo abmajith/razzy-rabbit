@@ -4,8 +4,8 @@ Simulation-in-the-loop design of field robots. Python describes and builds scene
 core (`cpp/core/`, see [docs/cpp_core.md](../docs/cpp_core.md)) runs them. The Python
 modules are the readable reference the C++ core is tested against.
 
-The code is being restructured into reusable layers, one step at a time: see
-[docs/architecture.md](../docs/architecture.md).
+Layers and their reasons: [docs/architecture.md](../docs/architecture.md). Building your own
+robot and scene: [docs/tutorial.md](../docs/tutorial.md).
 
 ## Layout (current)
 
@@ -24,7 +24,9 @@ sim/
   world/       World + features (Hills, Craters, Trail, DriveLoop, Ground, Forest, Grass,
                Rocks, Logs, Lander, Sun, Wind); terrain.py, flora.py, sampling.py   [step 5]
   scenes.py    the grounded scenes as compositions: forest_grounded, mars_yard
-  control.py   SE(3) quadrotor control + waypoint mission, Ackermann pure pursuit
+  myscenes/    your scenes, auto-loaded (meadow_scout.py: the tutorial example)        [step 8]
+  control/     chainable controller stages: FollowPath, Se3Controller, Mixer, PurePursuit,
+               Ackermann, WheelSpeedPI, VelocityCommand, DriveCommand              [step 6]
   runtime/     Python reference engine: sim.py (step loop), power.py (generic power train),
                aero.py (rotor drag), sensors.py (sensor runtime, GNSS sky view)    [step 4]
   core.py      front end of the C++ core: CoreBatch (training), CoreSim (viewer), make_sim

@@ -45,7 +45,7 @@ def test_variant_applies_to_plant_not_controller_and_restores(drone):
     p = drone.params
     assert m.body_mass[bid] == pytest.approx(mass0 * p["mass_frac"])
     assert np.allclose(m.actuator_gainprm[:4, 0], gain0 * p["thrust_coef"] * p["motor_gain"])
-    assert drone.ctrls[0].ctl.mass == pytest.approx(mass0, rel=1e-6)   # controller: nominal
+    assert drone.ctrls[0].stage("se3").mass == pytest.approx(mass0, rel=1e-6)   # controller: nominal
     lat = by_type(drone.robot)["gnss"]["latency_ms"]
     assert lat[0] == pytest.approx(lat0[0] + p["latency_ms_add"])
     assert by_type(drone.meta0["robots"][0])["gnss"]["latency_ms"] == lat0   # nominal untouched

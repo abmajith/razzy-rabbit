@@ -22,6 +22,11 @@ Procedural, reproducible MuJoCo scenes (same seed, byte-identical files) whose v
 |---|---|
 | `forest_grounded` | quadrotor sized from `drone_forest.toml`, flying a trail through steep mixed forest |
 | `mars_yard` | six-wheel rocker-bogie rover sized from `rover_yard.toml`, driving a rocky yard with craters |
+| `meadow_scout` | tutorial example: a quad assembled part by part, flying a trail over a meadow (`sim/myscenes/`) |
+
+**Build your own robot and scene: [docs/tutorial.md](docs/tutorial.md)**: parts → components → robot,
+world features, a controller chain, and what you get for free (C++ speed, battery, sensors,
+randomisation).
 
 ```bash
 uv run --extra sim python -m sim list                              # scenes
@@ -37,8 +42,8 @@ uv run --extra sim python -m sim render mars_yard --seconds 30     # headless MP
 - The discrete GPU is selected automatically (here the Intel Arc rather than the AMD iGPU).
   Override with `RAZZY_GPU=igpu`. Add `--hq` to `view` for full shadow quality.
 
-The code is being restructured into reusable parts, physics, components, robots and world
-features: see **[docs/architecture.md](docs/architecture.md)**.
+How the code is organised (parts, physics, components, robots, world, control, runtime,
+C++ core): **[docs/architecture.md](docs/architecture.md)**.
 
 ### Grounded vehicle design
 Size a drone or rover from a mission spec and a part database, then simulate the result

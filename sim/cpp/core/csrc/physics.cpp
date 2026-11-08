@@ -1,5 +1,5 @@
-// RNG, terrain lookup, analytic wind field (port of sim/wind.py) and power-train plants
-// (port of sim/design/plant.py).
+// RNG, terrain lookup, analytic wind field (port of sim/physics/aero.py), the generic power
+// train (port of sim/runtime/power.py) and rotor/body drag (port of sim/runtime/aero.py).
 #include <algorithm>
 #include <complex>
 
@@ -168,53 +168,73 @@ void rotor_point(const RotorParams& p, double T, double& n, double& Pe) {
   Pe = V * I;
 }
 
-// ------------------------------------------------------------------------- plants ---
-void DronePlant::update(mjModel* m, mjData* d, const Wind* wind, double t, double dt) {
-  double Tsum = 0, Pe_sum = 0;
-  for (int a : act) {
-    double T = d->actuator_force[a], n, Pe;
-    rotor_point(rp, T, n, Pe);
-    Pe_sum += Pe;
-    Tsum += T;
-  }
-  power = Pe_sum / esc_eff + avionics_w;
-  pack.terminal(power, soc, v, i);
-  soc = std::max(0.0, soc - i * dt / 3600.0 / pack.cap_ah);
-  energy_wh += power * dt / 3600.0;
-  double scale = soc > 0 ? (v / v_ref) * (v / v_ref) : 0.0;
-  for (int a : act) m->actuator_ctrlrange[2 * a + 1] = t_max_ref * scale;
-  // rotor drag: opposes airspeed in the rotor plane, proportional to total thrust
-  const double* R = d->xmat + 9 * bid;
-  double vel[3] = {d->qvel[dof], d->qvel[dof + 1], d->qvel[dof + 2]};
-  if (wind && wind->on) {
-    double vw[3];
-    wind->velocity(d->xpos + 3 * bid, t, vw);
-    for (int k = 0; k < 3; ++k) vel[k] -= vw[k];
-  }
-  double z[3] = {R[2], R[5], R[8]};
-  double vz = vel[0] * z[0] + vel[1] * z[1] + vel[2] * z[2];
-  for (int k = 0; k < 3; ++k) d->xfrc_applied[6 * bid + k] += -rotor_drag * Tsum * (vel[k] - vz * z[k]);
-}
-
-void RoverPlant::update(mjModel* m, mjData* d, double, double dt) {
+// ------------------------------------------------------------------ power train ---
+double Load::power(const mjData* d, double v_bus) const {
   double p = 0;
+  if (kind == ROTOR) {
+    double Pe_sum = 0;
+    for (int a : act) {
+      double n, Pe;
+      rotor_point(rp, d->actuator_force[a], n, Pe);
+      Pe_sum += Pe;
+    }
+    return Pe_sum / esc_eff;
+  }
   for (size_t k = 0; k < act.size(); ++k) {
     int a = act[k];
     double tau = std::fabs(d->actuator_force[a]), u = std::fabs(d->ctrl[a]);
     double i_mot = i0 + (i_s - i0) * std::min(tau / tau_s[k], 1.0);
-    p += v * u * i_mot;
+    p += v_bus * u * i_mot;
   }
-  power = p + avionics_w + n_servo * servo_w;
-  pack.terminal(power, soc, v, i);
-  soc = std::max(0.0, soc - i * dt / 3600.0 / pack.cap_ah);
-  energy_wh += power * dt / 3600.0;
-  double scale = soc > 0 ? v / pack.v_nom : 0.0;
+  return p;
+}
+
+void Load::apply_voltage(mjModel* m, double v, double soc) const {
+  if (kind == ROTOR) {
+    double scale = soc > 0 ? (v / v_ref) * (v / v_ref) : 0.0;
+    for (int a : act) m->actuator_ctrlrange[2 * a + 1] = t_max_ref * scale;
+    return;
+  }
+  double scale = soc > 0 ? v / v_nom : 0.0;
   for (size_t k = 0; k < act.size(); ++k) {
     int a = act[k];
-    m->actuator_gainprm[mjNGAIN * a] = tau_s[k] * scale;
+    m->actuator_gainprm[mjNGAIN * a] = tau_s[k] * scale;           // stall torque follows voltage
     m->actuator_forcerange[2 * a] = -tau_s[k] * scale;
     m->actuator_forcerange[2 * a + 1] = tau_s[k] * scale;
   }
+}
+
+void PowerSystem::update(mjModel* m, mjData* d, double dt) {
+  double p = 0.0;
+  for (size_t k = 0; k < loads.size(); ++k) p = k == 0 ? loads[k].power(d, v) : p + loads[k].power(d, v);
+  for (double w : constant) p += w;
+  power = p;
+  pack.terminal(power, soc, v, i);
+  soc = std::max(0.0, soc - i * dt / 3600.0 / pack.cap_ah);
+  energy_wh += power * dt / 3600.0;
+  for (const auto& ld : loads) ld.apply_voltage(m, v, soc);
+}
+
+// ------------------------------------------------------------------ aero effects ---
+void BodyDrag::update(mjData* d, const Wind& wind, double t) const {
+  double f[3] = {0, 0, 0};
+  if (wind.on) wind.drag(d->qpos + b.qa, d->qvel + b.va, CdA, t, f);
+  for (int k = 0; k < 3; ++k) d->xfrc_applied[6 * b.bid + k] = f[k];
+}
+
+void RotorDrag::update(mjData* d, const Wind& wind, double t) const {
+  double Tsum = 0;
+  for (int a : act) Tsum += d->actuator_force[a];
+  const double* R = d->xmat + 9 * b.bid;
+  double vel[3] = {d->qvel[b.va], d->qvel[b.va + 1], d->qvel[b.va + 2]};
+  if (wind.on) {
+    double vw[3];
+    wind.velocity(d->xpos + 3 * b.bid, t, vw);
+    for (int k = 0; k < 3; ++k) vel[k] -= vw[k];
+  }
+  double z[3] = {R[2], R[5], R[8]};
+  double vz = vel[0] * z[0] + vel[1] * z[1] + vel[2] * z[2];
+  for (int j = 0; j < 3; ++j) d->xfrc_applied[6 * b.bid + j] += -k * Tsum * (vel[j] - vz * z[j]);
 }
 
 }  // namespace rz

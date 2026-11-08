@@ -98,6 +98,34 @@ class Robot:
         return {"root_mass": r.mass(), "root_com": r.com(), "root_inertia": r.inertia(),
                 "total_parts_mass": sum(b.mass() for b in self.bodies())}
 
+    def cameras(self) -> list[str]:
+        """Camera names, chase view first, then onboard cameras (what view/render use)."""
+        names = []
+        for c in self.components:
+            for attr in ("camera", "rgb_camera", "depth_camera"):
+                if hasattr(c, attr):
+                    names.append(getattr(c, attr))
+        return sorted(names, key=lambda n: (not n.endswith("_chase"), names.index(n)))
+
+    def meta(self, **extra) -> dict:
+        """Everything the runtime needs about this robot: runtime_meta() (power, sensors,
+        compute, rotor drag) + body, mass, cameras, and the actuator lists the controller
+        stages read (rotors: `actuators`; wheels: `drive`, `wheels`, ...). `extra` is merged in."""
+        m = self.runtime_meta()
+        m.update(body=self.root.name, mass=self.mass_properties()["root_mass"], cameras=self.cameras())
+        rotors = self.info.get("rotors", [])
+        if rotors:
+            m.update(type="quadrotor", actuators=[r.actuator for r in rotors])
+        wheels, steers = self.info.get("wheels", []), self.info.get("steers", [])
+        if wheels:
+            m.update(type="rocker_bogie" if steers else "wheeled", wheels=[w.body_name for w in wheels],
+                     wheel_xy=[list(map(float, w.xy)) for w in wheels], wheel_radius=wheels[0].radius,
+                     drive=[w.actuator for w in wheels], omega0=wheels[0].omega0, tau_stall=wheels[0].tau_s)
+        if steers:
+            m.update(steer=[s.actuator for s in steers], steer_xy={s.joint: list(map(float, s.xy)) for s in steers})
+        m.update(extra)
+        return m
+
     def compile(self):
         """Compile the robot alone (on an empty floor) into a MuJoCo model, e.g. to read
         exact totals: model.body_subtreemass[model.body(robot.name).id]."""
@@ -155,7 +183,7 @@ class Robot:
             root.attrs = f' quat="{math.cos(yaw/2):.5f} 0 0 {math.sin(yaw/2):.5f}"'
         root.joint = f'<freejoint name="{self.name}_root"/>'
         b.world.append("\n    ".join(root.xml()))
-        b.actuators += self.actuators
+        b.actuators += [a() if callable(a) else a for a in self.actuators]
         # ground truth of the main body (for controllers / rewards, not a sensor model)
         b.sensors += self.sensors + [f'<framepos name="{self.name}_pos" objtype="body" objname="{root.name}"/>',
                                      f'<framequat name="{self.name}_quat" objtype="body" objname="{root.name}"/>']

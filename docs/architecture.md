@@ -1,7 +1,7 @@
 # Architecture: building robots and scenes from reusable pieces
 
-> **Status: agreed design, not yet implemented.** Decisions taken are recorded in
-> section 9. Implementation follows the migration plan in section 7, one layer per branch.
+> **Status: implemented** (migration steps 1-8, section 7). Decisions are recorded in
+> section 9. To build something with it, start with the [tutorial](tutorial.md).
 
 ## 1. Why restructure
 
@@ -257,36 +257,48 @@ Building blocks: `terrain.py` (heightfields, textures), `flora.py` (one tree, ro
 
 ### 3.6 `control/`: one interface, chainable
 
+**Done (step 6).** Each stage implements:
+- `bind(sim, robot)`: reads the *nominal* model, i.e. what a real controller knows
+- `update(t, dt, state, x) -> y`: `x` is the previous stage's output
+- `spec()`: its parameters, for the scene meta
+
+Stages chain with `>>`:
+
 ```python
-class Controller:
-    def reset(self, robot_info): ...
-    def update(self, t, inputs) -> outputs: ...
+FollowPath(route, cruise=3.0) >> Se3Controller() >> Mixer()          # forest quad
+PurePursuit(loop, speed=0.6) >> Ackermann() >> WheelSpeedPI()        # mars rover
 ```
 
-| controller | inputs | outputs |
+| stage (file) | input | output |
 |---|---|---|
-| `FollowPath(path, speed)` | pose | velocity setpoint |
-| `Se3Velocity(gains)` | velocity setpoint, attitude | body wrench |
-| `Mixer` (from rotor geometry) | wrench | rotor thrusts |
-| `PurePursuit(path)` | pose | speed + curvature |
-| `Ackermann(steer geometry)` | speed + curvature | wheel speeds + steer angles |
-| `WheelSpeedPI` | wheel speed targets | drive commands |
+| `FollowPath` (path.py) | state | pose setpoint {p, v, yaw}; take-off ramp, carrot, yaw rate limit |
+| `PurePursuit` (path.py) | state | (speed, curvature) |
+| `Se3Controller` (multirotor.py) | pose setpoint | wrench [T, tau] |
+| `Mixer` (multirotor.py) | wrench | rotor thrusts, clipped to the live (battery-sagged) limits |
+| `Ackermann` (ground.py) | (speed, curvature) | steering angles to the servos, wheel-speed targets |
+| `WheelSpeedPI` (ground.py) | wheel-speed targets | drive duty (feed-forward + PI) |
+| `VelocityCommand`, `DriveCommand` | `.command` set by a policy or joystick | replace the top stage |
 
-```python
-robot.controller = FollowPath(world.path("trail"), speed=3) >> Se3Velocity() >> Mixer()
-```
-
-An RL policy replaces the first stage(s) (`policy >> Se3Velocity() >> Mixer()`), which is
-the "setpoint mode" we already have, made general. Every controller states whether it
-reads **truth** or **sensor** inputs, so moving from truth to sensors (later, through an
-estimator) is an explicit, visible switch. That switch is the sim-to-real boundary.
+- **The scene stores the chain** (`meta["control"] = chain.spec()`). The runtime rebuilds it
+  with `control.from_spec`. Controller names in the meta are gone.
+- **An RL policy replaces the top stage:** `VelocityCommand() >> Se3Controller() >> Mixer()`,
+  then set `.command` every policy step. This is the C++ core's "setpoint" mode, made
+  general.
+- **The state source is explicit:** `chain.using("truth" | "sensors")`. Only `"truth"`
+  exists so far; `"sensors"` raises until a state estimator is built. That switch is the
+  sim-to-real boundary.
+- **Body drag in the wind is physics, not control:** it moved to `runtime/aero.py`
+  (`BodyDrag`).
+- **The C++ core runs the two chains above** with their default gains. Any other chain or
+  gain falls back to the Python engine with a message, until step 7.
+- **Proof:** trajectories, battery and sensor samples are bit-identical to the old
+  monolithic controllers.
 
 ### 3.7 `scenes/`: short compositions
 
 **Done (step 5)** for the world part: `sim/scenes.py` now holds both scenes as
 compositions of about 25 lines each (world features, the sized vehicle, a route). The
-`task` part, `FollowPath(...)` instead of controller names in the meta, comes with
-`control/` in step 6:
+controller chain is stored with the scene since step 6:
 
 ```python
 @scene
@@ -343,11 +355,19 @@ the template is the same function the scene uses, sizing and simulation can't di
   It loads a scene and steps it:
   `controllers → actuators → power system → physics step → sensors`. The step loop iterates
   over components, with no per-vehicle code.
-- **`core/` (C++).** Mirrors each *component type* as a C++ class. The reset config becomes
-  a list `[{"type": "Rotor", ...}, {"type": "Imu", ...}]`, and the env iterates over it.
-  - **A new robot needs no C++.**
-  - **A new component type** needs a Python reference class, a C++ class and an
-    equivalence test, each in its own file.
+- **`core/` (C++). Done (step 7).** It mirrors each *type* as a C++ class:
+  - control stages (`control.cpp`)
+  - power loads (`PowerSystem`) and drag effects (`physics.cpp`)
+  - sensors (`sensors.cpp`)
+
+  The reset config is the scene's descriptions with names resolved to ids: the stage list,
+  the load list, the sensor entries. The env iterates over them, with no drone or rover
+  code paths.
+  - **A new robot or chain made of existing types needs no C++.** Custom gains run in C++
+    and match Python (tested).
+  - **A new type** needs a Python reference class, its C++ port, a parser entry and an
+    equivalence test.
+  - **Speed:** unchanged (about 23k steps/s for one forest drone, about 340k on 16 threads).
 
 ### 3.10 `analysis/`
 
@@ -418,9 +438,9 @@ A new component brings its uncertain parameters along. No central list to edit.
 | 3 ✓ | `components/` + `robots/` + templates; quad and rover rebuilt from components | compiled models, sizing and trajectories bit-identical; existing tests pass |
 | 4 ✓ | generic `runtime/power.py` + `runtime/sensors.py` | same battery and sensor results as `DronePlant` / `RoverPlant` / `SensorSuite` |
 | 5 ✓ | `world/` features + the two scenes as compositions | same scenes, rendered side by side; tests pass |
-| 6 | `control/` interface + chains | same trajectories as today's controllers |
-| 7 | C++ core made component-generic | equivalence tests against the Python reference (as now) |
-| 8 | tutorial: "a new robot and scene in 30 lines" | you write one |
+| 6 ✓ | `control/` interface + chains | same trajectories as today's controllers |
+| 7 ✓ | C++ core made component-generic | equivalence tests against the Python reference (as now) |
+| 8 ✓ | tutorial: "a new robot and scene in 30 lines" ([tutorial.md](tutorial.md)) | you write one |
 
 Old modules keep working until their replacement is merged, then they're deleted in the
 same step. No step changes more than one layer.
