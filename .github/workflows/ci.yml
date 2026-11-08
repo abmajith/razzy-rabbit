@@ -28,10 +28,10 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install Python environment (locked)
+      - name: Install Python environment (locked; compiles the razzy_core C++ extension)
         run: uv sync --extra sim --locked
 
-      - name: Tests (FEA core + simulation scenes)
+      - name: Tests (FEA core, scenes, sensors, uncertainty, C++ core vs Python reference)
         # tests/gui needs a display and currently has a known failing assertion; run locally
         run: uv run --extra sim pytest -q tests/core tests/sim
 

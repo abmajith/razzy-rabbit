@@ -125,6 +125,19 @@ uv run --extra sim python -m sim view forest_grounded --variant 7
 ```
 See **[docs/uncertainty.md](docs/uncertainty.md)**.
 
+### C++ core (what actually runs)
+Physics, controllers, battery plant, sensors and latency run in a C++ core (`razzy_core`,
+built automatically by `uv sync --extra sim`; needs `cmake` and a C++17 compiler). The Python
+modules stay as the readable reference it is tested against. `view`/`render`/`sensors`/
+`randomize` use the core (`--engine python` for the reference); training uses `CoreBatch`:
+```python
+from sim.core import CoreBatch
+env = CoreBatch("forest_grounded", n_envs=256, threads=16, mode="setpoint")
+env.reset(variants=range(256)); env.act(actions); env.step(33); env.imu, env.gnss, env.plant
+```
+~13x the Python reference per env and ~200x on 16 threads (forest drone, all sensors on).
+See **[docs/cpp_core.md](docs/cpp_core.md)**.
+
 ### C++ batched rollouts
 ```bash
 cmake -S sim/cpp -B sim/cpp/build && cmake --build sim/cpp/build -j
