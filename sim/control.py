@@ -103,6 +103,7 @@ class QuadMission:
         self.t_takeoff = 2.5
         self.ground0 = self.ctl.pos[2]
         self.CdA = rmeta.get("drag_CdA", 0.04)
+        self.err = 0.0          # distance to the carrot (tracking error), after take-off
 
     def target(self, t):
         p, tan = _interp(self.P, self.s, self.s_now)
@@ -119,6 +120,7 @@ class QuadMission:
             v_d = np.zeros(3)
         else:
             lag = np.linalg.norm(self.ctl.pos - p_d)
+            self.err = float(lag)
             speed = self.cruise * np.clip(1.6 - lag / 2.0, 0.0, 1.0)
             self.s_now += self.dirn * speed * dt
             if self.s_now >= self.s[-1] or self.s_now <= self.s[1]:
@@ -338,6 +340,7 @@ class RoverAckermann:
         kmax = np.tan(np.radians(38)) / np.max(np.abs(self.sxy[:, 0]))
         self.kmax = kmax / (1 + kmax * np.max(np.abs(self.sxy[:, 1])))
         self.laps = 0
+        self.err = 0.0
 
     def update(self, t: float, dt: float) -> None:
         d = self.sim.d
@@ -346,7 +349,9 @@ class RoverAckermann:
         yaw = np.arctan2(R[1, 0], R[0, 0])
         n = len(self.P)
         win = (self.idx + np.arange(60)) % n
-        k = int(np.argmin(np.linalg.norm(self.P[win] - p, axis=1)))
+        dist = np.linalg.norm(self.P[win] - p, axis=1)
+        k = int(np.argmin(dist))
+        self.err = float(dist[k])                               # cross-track error
         if self.idx + k >= n:
             self.laps += 1
         self.idx = (self.idx + k) % n

@@ -7,6 +7,9 @@
                                         headless MP4: chase view + onboard RGB + depth insets
   design drone|rover [--config FILE] [--top N]
                                         size a vehicle from a mission file (sim/design/configs)
+  randomize <scene> [--n N] [--seconds S]
+                                        draw N vehicles from the mission's [uncertainty]
+                                        ranges, run each, report robustness + sensitivities
   sensors <scene> [--seconds S] [--log FILE.npz]
                                         run a designed vehicle, report its sensor errors
                                         (IMU noise/vibration, GNSS under canopy, baro, mag)
@@ -62,7 +65,7 @@ def cmd_view(a):
     import mujoco
     import mujoco.viewer
     from .runtime import Sim
-    sim = Sim(a.scene, a.seed, rebuild=a.rebuild)
+    sim = Sim(a.scene, a.seed, rebuild=a.rebuild, variant=a.variant)
     if not a.hq:  # interactive: lighter shadows/MSAA keep the UI responsive
         sim.m.vis.quality.shadowsize = 4096
         sim.m.vis.quality.offsamples = 4
@@ -115,7 +118,7 @@ def cmd_render(a):
     import imageio.v2 as iio
     import mujoco
     from .runtime import Sim
-    sim = Sim(a.scene, a.seed, rebuild=a.rebuild)
+    sim = Sim(a.scene, a.seed, rebuild=a.rebuild, variant=a.variant)
     W, H = a.width, a.width * 9 // 16
     iw, ih = W // 4, H // 4
     main = mujoco.Renderer(sim.m, H, W)
@@ -190,10 +193,62 @@ def cmd_render(a):
         print(f"[sim] sensors: {sim.sensors.status()}")
 
 
+def cmd_randomize(a):
+    from .runtime import Sim
+    from .uncertainty import PARAMS
+    sim = Sim(a.scene, a.seed, rebuild=a.rebuild)
+    unc = sim.meta0.get("uncertainty")
+    if not unc:
+        raise SystemExit(f"{a.scene}: no [uncertainty] spec (use a designed vehicle: forest_grounded, mars_yard)")
+    print(f"[sim] {a.scene}: {a.n} variants x {a.seconds:.0f} s, ranges from the mission's [uncertainty]")
+    nsteps = int(a.seconds / sim.m.opt.timestep)
+    rows, vecs, names = [], [], None
+    t_start = time.time()
+    for k in range(a.n):
+        sim.reset(k)
+        names, vec = sim.param_vector()
+        bid = sim.m.body(sim.robot["body"]).id
+        ctl = sim.ctrls[0] if sim.ctrls else None
+        errs, pw, tilt = [], [], 0.0
+        for i in range(nsteps):
+            sim.step()
+            if i % 25 == 0 and sim.d.time > 4.0:
+                errs.append(getattr(ctl, "err", 0.0))
+                pw.append(sim.plant.power if sim.plant else 0.0)
+                tilt = max(tilt, float(np.degrees(np.arccos(np.clip(sim.d.xmat[bid][8], -1, 1)))))
+        e = np.asarray(errs)
+        rms, mx = float(np.sqrt(np.mean(e * e))), float(e.max())
+        status = "LOST" if (mx > 5.0 or tilt > 75) else "ok"
+        rows.append(dict(k=k, rej=sim.rejected, rms=rms, max=mx, tilt=tilt, power=float(np.mean(pw)),
+                         soc=sim.plant.soc if sim.plant else 1.0, status=status))
+        vecs.append(vec)
+        print(f"  variant {k:3d}  track rms {rms:5.2f} m  max {mx:5.2f} m  tilt max {tilt:4.0f} deg  "
+              f"power {np.mean(pw):6.1f} W  [{status}]  (rejected draws: {sim.rejected})", flush=True)
+    rms = np.array([r["rms"] for r in rows])
+    lost = sum(r["status"] != "ok" for r in rows)
+    rej = sum(r["rej"] for r in rows)
+    print(f"\nrobustness: {a.n - lost}/{a.n} ok; tracking rms median {np.median(rms):.2f} m, "
+          f"worst {rms.max():.2f} m; infeasible draws rejected: {rej} "
+          f"({rej / (rej + a.n) * 100:.0f}%)   [{time.time() - t_start:.0f} s]")
+    # which uncertainties drive the error? Spearman rank correlation per parameter
+    V = np.asarray(vecs)
+    if a.n >= 5:
+        rk = lambda x: np.argsort(np.argsort(x)).astype(float)
+        cors = []
+        for j, nm in enumerate(names):
+            if np.ptp(V[:, j]) > 0:
+                cors.append((float(np.corrcoef(rk(V[:, j]), rk(rms))[0, 1]), nm))
+        cors.sort(key=lambda c: -abs(c[0]))
+        print("most influential on tracking error (Spearman rho, needs ~30+ variants to trust):")
+        for c, nm in cors[:6]:
+            base = nm.rsplit("_", 1)[0] if nm not in PARAMS else nm
+            print(f"  {nm:22s} {c:+.2f}   {PARAMS.get(base, ('', '', ''))[2]}")
+
+
 def cmd_sensors(a):
     from .runtime import Sim
     from .sensing.analysis import report
-    sim = Sim(a.scene, a.seed, rebuild=a.rebuild, record=True)
+    sim = Sim(a.scene, a.seed, rebuild=a.rebuild, variant=a.variant, record=True)
     if sim.sensors is None:
         raise SystemExit(f"{a.scene}: robot has no sensor spec (use a designed vehicle, e.g. forest_grounded, mars_yard)")
     t0 = time.time()
@@ -214,7 +269,7 @@ def main(argv=None):
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list")
-    for name in ("build", "view", "render", "sensors"):
+    for name in ("build", "view", "render", "sensors", "randomize"):
         s = sub.add_parser(name)
         s.add_argument("scene")
         s.add_argument("--seed", type=int, default=0)
@@ -223,6 +278,12 @@ def main(argv=None):
             s.add_argument("--wind", action="store_true", help="draw wind-field arrows")
         if name == "view":
             s.add_argument("--hq", action="store_true", help="full 8k shadows + 8x MSAA (slower)")
+        if name in ("view", "render", "sensors"):
+            s.add_argument("--variant", type=int, default=None,
+                           help="draw vehicle K from the [uncertainty] ranges (default: nominal)")
+        if name == "randomize":
+            s.add_argument("--n", type=int, default=20)
+            s.add_argument("--seconds", type=float, default=20)
         if name == "sensors":
             s.add_argument("--seconds", type=float, default=60)
             s.add_argument("--log", default=None, help="save raw measurements + truth (.npz)")
@@ -238,7 +299,7 @@ def main(argv=None):
     s.add_argument("--top", type=int, default=8)
     a = p.parse_args(argv)
     {"list": cmd_list, "build": cmd_build, "view": cmd_view, "render": cmd_render,
-     "design": cmd_design, "sensors": cmd_sensors}[a.cmd](a)
+     "design": cmd_design, "sensors": cmd_sensors, "randomize": cmd_randomize}[a.cmd](a)
 
 
 if __name__ == "__main__":

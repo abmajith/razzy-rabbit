@@ -116,6 +116,15 @@ uv run --extra sim python -m sim render forest_grounded                 # insets
 Models, datasheet fields and how to fit them to your real hardware:
 **[docs/sensor_models.md](docs/sensor_models.md)**.
 
+### Uncertainty / domain randomisation
+`[uncertainty]` in the mission file says how well each number is known; every episode draws
+one plausible vehicle (mass, CoM, thrust, motor lag, battery, sensor noise, latency, wind):
+```bash
+uv run --extra sim python -m sim randomize forest_grounded --n 30   # robustness + sensitivities
+uv run --extra sim python -m sim view forest_grounded --variant 7
+```
+See **[docs/uncertainty.md](docs/uncertainty.md)**.
+
 ### C++ batched rollouts
 ```bash
 cmake -S sim/cpp -B sim/cpp/build && cmake --build sim/cpp/build -j
