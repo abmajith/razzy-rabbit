@@ -1,7 +1,7 @@
 # Architecture: building robots and scenes from reusable pieces
 
-> **Status: agreed design, not yet implemented.** Decisions taken are recorded in
-> section 9. Implementation follows the migration plan in section 7, one layer per branch.
+> **Status: implemented** (migration steps 1-8, section 7). Decisions are recorded in
+> section 9. To build something with it, start with the [tutorial](tutorial.md).
 
 ## 1. Why restructure
 
@@ -440,7 +440,7 @@ A new component brings its uncertain parameters along. No central list to edit.
 | 5 ✓ | `world/` features + the two scenes as compositions | same scenes, rendered side by side; tests pass |
 | 6 ✓ | `control/` interface + chains | same trajectories as today's controllers |
 | 7 ✓ | C++ core made component-generic | equivalence tests against the Python reference (as now) |
-| 8 | tutorial: "a new robot and scene in 30 lines" | you write one |
+| 8 ✓ | tutorial: "a new robot and scene in 30 lines" ([tutorial.md](tutorial.md)) | you write one |
 
 Old modules keep working until their replacement is merged, then they're deleted in the
 same step. No step changes more than one layer.

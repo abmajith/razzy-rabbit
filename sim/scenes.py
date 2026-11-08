@@ -86,3 +86,9 @@ def build(name: str, seed: int = 0):
         raise SystemExit(f"unknown scene {name!r}; choose from {', '.join(SCENES)}")
     b = SCENES[name](seed)
     return b.write()
+
+
+# your scenes in sim/myscenes/*.py register themselves on import
+from . import myscenes as _myscenes  # noqa: E402
+
+_myscenes.load_all()
