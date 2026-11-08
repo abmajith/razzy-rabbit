@@ -24,8 +24,11 @@ numbers and the way the parts are mounted.
 | **compute** | `[compute]`: where the policy runs → `[compute.*]` | **this step** |
 | uncertainty ranges (domain randomisation) | `[uncertainty]` | see [uncertainty.md](uncertainty.md) |
 
-The generator (`to_mjcf`) merges these into the scene's `meta.json`, so each generated
-scene carries its full sensor spec. `Sim` then builds a `SensorSuite` automatically.
+The vehicle templates turn these tables into sensor components (`Imu`, `Baro`, `Mag`,
+`Gnss`, the cameras of a `CameraModule`, a `Computer`; see `sim/components/sensors.py`).
+Each component writes its entry into the scene's `meta.json`, so each generated scene
+carries its full sensor spec. `Sim` then builds a `SensorSuite` (`sim/runtime/sensors.py`)
+from those entries automatically.
 
 ## Using it
 

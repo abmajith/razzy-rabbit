@@ -77,6 +77,6 @@ def test_drone_battery_drains_and_power_matches_hover():
     sim = Sim("forest_grounded", 0)
     sim.step(int(8.0 / sim.m.opt.timestep))
     hover_w = sim.robot["design"]["metrics"]["hover_w"]
-    assert 0.0 < sim.plant.soc < 1.0
-    assert sim.plant.v < sim.plant.pack.ocv(1.0)
-    assert abs(sim.plant.power - hover_w) / hover_w < 0.3     # cruising ~ hover power
+    assert 0.0 < sim.power.soc < 1.0
+    assert sim.power.v < sim.power.pack.ocv(1.0)
+    assert abs(sim.power.power - hover_w) / hover_w < 0.3     # cruising ~ hover power

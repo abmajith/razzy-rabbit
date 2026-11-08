@@ -7,11 +7,11 @@ import struct
 import mujoco
 import numpy as np
 
-from . import scenes as _scenes  # noqa: F401  (registers sim/custom controllers)
-from .builder import GENERATED
-from .control import CONTROLLERS
-from .terrain import Terrain
-from .physics.aero import WindField
+from .. import scenes as _scenes  # noqa: F401  (registers the scenes)
+from ..builder import GENERATED
+from ..control import CONTROLLERS
+from ..physics.aero import WindField
+from ..terrain import Terrain
 
 
 def scene_dir(name: str, seed: int):
@@ -40,7 +40,7 @@ class Sim:
                  sensors: bool = True, record: bool = False, variant: int | None = None) -> None:
         folder = scene_dir(name, seed)
         if rebuild or not (folder / "scene.xml").exists():
-            from .scenes import build
+            from ..scenes import build
             print(f"[sim] generating {name} (seed {seed}) ...", flush=True)
             build(name, seed)
         self.folder, self.seed = folder, seed
@@ -49,12 +49,12 @@ class Sim:
         self.d = mujoco.MjData(self.m)
         self.meta0 = json.loads((folder / "meta.json").read_text())
         self.terrain = load_terrain(self.meta0, folder)
-        from .uncertainty import ModelSnapshot
+        from ..uncertainty import ModelSnapshot
         self._nominal = ModelSnapshot(self.m)
         self.reset(variant)
 
     def reset(self, variant: int | None = None) -> None:
-        from . import uncertainty as U
+        from .. import uncertainty as U
         m, d = self.m, self.d
         self._nominal.restore(m)
         mujoco.mj_setConst(m, d)
@@ -78,19 +78,23 @@ class Sim:
         if self.params:
             U.apply_model(m, d, self.robot, self.params)
             mujoco.mj_forward(m, d)
-        self.plant = None
-        if "plant" in self.robot:          # designed vehicle: battery + motor model, runs last
-            from .design.plant import make_plant
-            self.plant = make_plant(self, self.robot)
-            self.ctrls.append(self.plant)
+        # power train and rotor aerodynamics: generic, from what the components declared
+        self.power = None
+        if "power" in self.robot:
+            from .power import PowerSystem
+            self.power = PowerSystem(self, self.robot["power"])
+            self.ctrls.append(self.power)
+        if "rotor_drag" in self.robot:
+            from .aero import RotorDrag
+            self.ctrls.append(RotorDrag(self, self.robot["rotor_drag"]))
         self.sensors = None
-        if self.use_sensors and "sensors" in self.robot:   # grounded sensor models, sampled after each step
-            from .sensing.suite import SensorSuite
+        if self.use_sensors and self.robot.get("sensors"):    # sensor models, sampled after each step
+            from .sensors import SensorSuite
             noise_seed = self.seed if variant is None else self.seed + 1_000_003 * (variant + 1)
             self.sensors = SensorSuite(self, self.robot, noise_seed, record=self.record)
 
     def param_vector(self) -> tuple[list[str], np.ndarray]:
-        from .uncertainty import flatten
+        from ..uncertainty import flatten
         return flatten(self.params)
 
     @property

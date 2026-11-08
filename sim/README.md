@@ -16,8 +16,8 @@ sim/
   components/  robot building blocks: QuadFrame, Rotor, Battery, Board, CameraModule, Imu,
                Chassis, RockerBogie, SteeringServo, WheelDrive, Mast ...           [step 3]
   robots/      Robot (assembly at named mounts) + templates: quadrotor, rocker_bogie [step 3]
-  design/      vehicle sizing: configs/*.toml (missions), drone.py, rover.py; plant.py (power train)
-  sensing/     sensor models, scene coupling (GNSS sky view), Allan/FFT analysis
+  design/      vehicle sizing: configs/*.toml (missions), drone.py, rover.py
+  sensing/     sensor error models (models.py), Allan/FFT analysis (analysis.py)
   uncertainty.py  [uncertainty] ranges -> per-episode vehicle variants
   terrain.py   fBm heightfields (MuJoCo binary .bin) + matching ground textures
   mesh.py      low-poly primitives merged into one OBJ per material
@@ -25,7 +25,8 @@ sim/
   builder.py   assembles scene.xml + meta.json, sky, sun, lighting, shared robot materials
   scenes.py    the grounded scenes: forest_grounded, mars_yard
   control.py   SE(3) quadrotor control + waypoint mission, Ackermann pure pursuit
-  runtime.py   Python reference engine: load a scene, step controller/plant/physics/sensors
+  runtime/     Python reference engine: sim.py (step loop), power.py (generic power train),
+               aero.py (rotor drag), sensors.py (sensor runtime, GNSS sky view)    [step 4]
   core.py      front end of the C++ core: CoreBatch (training), CoreSim (viewer), make_sim
   gpu.py       picks the discrete GPU for the viewer (DRI_PRIME) and headless EGL
   cpp/core/    razzy_core: C++ envs (physics, controllers, plants, sensors), nanobind module

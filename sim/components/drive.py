@@ -52,6 +52,10 @@ class SteeringServo(Component):
         robot.info.setdefault("steers", []).append(self)
         self.publish(corner, body, [0, 0, 0])          # the wheel mount keeps the corner name
 
+    def contribute(self, robot, meta: dict) -> None:
+        meta["power"]["loads"].append({"type": "constant", "group": "servos", "label": self.servo_name,
+                                       "watts": self.spec["power_w"]})
+
     def summary(self) -> str:
         return f"SteeringServo: {self.servo_name}, +-{self.lock:.0f} deg"
 
@@ -90,6 +94,16 @@ class WheelDrive(Component):
         self.xy = body.world_offset()[:2]
         self.radius = r
         robot.info.setdefault("wheels", []).append(self)
+
+    def contribute(self, robot, meta: dict) -> None:
+        loads = meta["power"]["loads"]
+        group = next((ld for ld in loads if ld["type"] == "gearmotor" and ld["motor_name"] == self.motor_name), None)
+        if group is None:
+            group = {"type": "gearmotor", "motor_name": self.motor_name, "actuators": [], "motor": self.motor,
+                     "v_ratio": self.ratio, "tau_s": []}
+            loads.append(group)
+        group["actuators"].append(self.actuator)
+        group["tau_s"].append(self.tau_s)
 
     def summary(self) -> str:
         return (f"WheelDrive: {self.wheel_name} + {self.motor_name} "

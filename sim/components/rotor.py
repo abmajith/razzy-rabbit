@@ -7,8 +7,9 @@ and a MuJoCo actuator whose command is thrust [N]:
     physics.dc_motor.speed_loop_time_constant in the sizing), up to `thrust_max`
     reaction torque about the hub = spin x yaw_coef x thrust, yaw_coef = cp D / (2 pi ct)
 
-The battery-sag limit on thrust and the electrical power are applied at run time by the
-power-train plant (sim/design/plant.py today; generic in step 4).
+Its electrical load (power from thrust) and the battery-sag limit on thrust are applied at
+run time by the generic power train (sim/runtime/power.py); its rotor drag by
+sim/runtime/aero.py. Its imbalance and blade-pass ripple feed the IMU vibration model.
 """
 from __future__ import annotations
 
@@ -23,8 +24,12 @@ class Rotor(Component):
     kind = "rotor"
 
     def __init__(self, motor: str, prop: str, spin: int, thrust_max: float, lag_s: float,
-                 motor_mount_g: float = 0.0, hub_height: float = 0.03) -> None:
+                 motor_mount_g: float = 0.0, hub_height: float = 0.03, esc_eff: float = 0.93,
+                 imbalance_gmm: float = 0.5, thrust_ripple: float = 0.03, drag_coef: float = 0.012) -> None:
+        """imbalance_gmm / thrust_ripple: vibration sources seen by the IMU (installation);
+        drag_coef: rotor (blade-flapping) drag per newton of thrust per m/s of airspeed."""
         super().__init__()
+        self.esc_eff, self.imbalance_gmm, self.thrust_ripple, self.drag_coef = esc_eff, imbalance_gmm, thrust_ripple, drag_coef
         self.motor_name, self.prop_name = motor, prop
         self.motor, self.prop = parts.get("motor", motor), parts.get("prop", prop)
         self.spin, self.thrust_max, self.lag_s = spin, thrust_max, lag_s
@@ -58,6 +63,19 @@ class Rotor(Component):
         self.hub = np.array([tip[0], tip[1], zp])
         robot.info.setdefault("rotors", []).append(self)
         self.publish("hub", body, self.hub)
+
+    def contribute(self, robot, meta: dict) -> None:
+        loads = meta["power"]["loads"]
+        group = next((ld for ld in loads if ld["type"] == "rotor" and ld["motor_name"] == self.motor_name
+                      and ld["prop_name"] == self.prop_name), None)
+        if group is None:                          # identical rotors share one load entry
+            group = {"type": "rotor", "motor_name": self.motor_name, "prop_name": self.prop_name, "actuators": [],
+                     "motor": self.motor, "prop": self.prop, "rho": robot.environment["air_density"],
+                     "esc_eff": self.esc_eff, "t_max_ref": self.thrust_max}
+            loads.append(group)
+        group["actuators"].append(self.actuator)
+        drag = meta.setdefault("rotor_drag", {"body": robot.root.name, "actuators": [], "rotor_drag": self.drag_coef})
+        drag["actuators"].append(self.actuator)
 
     def summary(self) -> str:
         return (f"Rotor: {self.motor_name} + {self.prop_name}, spin {'+' if self.spin > 0 else '-'}, "

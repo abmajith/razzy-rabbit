@@ -144,10 +144,19 @@ A body's mass properties come from its parts (`Body.inertial`): `"parts"` sums e
 | sensors, views | `Imu`, `ViewCamera` (sensors.py), `Mast` (chassis.py) |
 | protection | `PropGuard` (frame.py) |
 
-Still to come (step 4): `Gnss`, `Baro`, `Mag` and the sensor models as components,
-`Computer`, and **a generic power train**: the battery supplies the sum of every
-component's `electrical_load()`, and the voltage is fed back to every actuator. Then
-`DronePlant` and `RoverPlant` disappear, and a robot with rotors *and* wheels just works.
+**Done (step 4):** sensors and power are components too.
+- `Imu(part, mount_hz)`, `Baro`, `Mag`, `Gnss(part, antenna_height)`, the cameras of a
+  `CameraModule(part, rgb=, depth=)` and a `Computer(part)` each write their entry into the
+  robot meta through `contribute(robot, meta)`. `runtime/sensors.py` builds the error
+  models from those entries.
+- **Generic power train** (`runtime/power.py`): every component declares its electrical
+  load (`rotor`: power from thrust, `gearmotor`: from torque, `constant`: boards and servos,
+  in named groups). The battery supplies the sum, and the voltage sag is fed back to every
+  rotor and gearmotor. `DronePlant` and `RoverPlant` are gone; a robot with rotors *and*
+  wheels just works.
+- `robot.summary()` prints the power budget and the sensor list.
+- Battery, power, every sensor stream, trajectories and randomised variants are
+  bit-identical to step 3.
 
 ### 3.4 `robots/`: assembly
 
@@ -283,7 +292,8 @@ the template is the same function the scene uses, sizing and simulation can't di
 
 ### 3.9 `runtime/` and `core/`
 
-- **`runtime/` (Python reference).** Loads a scene and steps it:
+- **`runtime/` (Python reference). Done (step 4):** `sim.py`, `power.py`, `aero.py`, `sensors.py`.
+  It loads a scene and steps it:
   `controllers → actuators → power system → physics step → sensors`. The step loop iterates
   over components, with no per-vehicle code.
 - **`core/` (C++).** Mirrors each *component type* as a C++ class. The reset config becomes
@@ -359,7 +369,7 @@ A new component brings its uncertain parameters along. No central list to edit.
 | 1 ✓ | this document | your review |
 | 2 ✓ | remove the demo scenes, idealised robots and their controllers; then `parts/` + `physics/` | grounded-scene tests pass; unit tests per formula; sizing results identical to today |
 | 3 ✓ | `components/` + `robots/` + templates; quad and rover rebuilt from components | compiled models, sizing and trajectories bit-identical; existing tests pass |
-| 4 | generic `runtime/power.py` + `runtime/sensors.py` | same battery and sensor results as `DronePlant` / `RoverPlant` / `SensorSuite` |
+| 4 ✓ | generic `runtime/power.py` + `runtime/sensors.py` | same battery and sensor results as `DronePlant` / `RoverPlant` / `SensorSuite` |
 | 5 | `world/` features + the two scenes as compositions | same scenes, rendered side by side; tests pass |
 | 6 | `control/` interface + chains | same trajectories as today's controllers |
 | 7 | C++ core made component-generic | equivalence tests against the Python reference (as now) |

@@ -7,6 +7,7 @@ pytest.importorskip("mujoco")
 
 from sim import uncertainty as U  # noqa: E402
 from sim.runtime import Sim  # noqa: E402
+from sim.runtime.sensors import by_type  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -39,15 +40,15 @@ def test_variant_applies_to_plant_not_controller_and_restores(drone):
     m, bid = drone.m, _body(drone)
     drone.reset(None)
     mass0, gain0 = float(m.body_mass[bid]), m.actuator_gainprm[:4, 0].copy()
-    lat0 = drone.robot["sensors"]["gnss"]["latency_ms"]
+    lat0 = by_type(drone.robot)["gnss"]["latency_ms"]
     drone.reset(3)
     p = drone.params
     assert m.body_mass[bid] == pytest.approx(mass0 * p["mass_frac"])
     assert np.allclose(m.actuator_gainprm[:4, 0], gain0 * p["thrust_coef"] * p["motor_gain"])
     assert drone.ctrls[0].ctl.mass == pytest.approx(mass0, rel=1e-6)   # controller: nominal
-    lat = drone.robot["sensors"]["gnss"]["latency_ms"]
+    lat = by_type(drone.robot)["gnss"]["latency_ms"]
     assert lat[0] == pytest.approx(lat0[0] + p["latency_ms_add"])
-    assert drone.meta0["robots"][0]["sensors"]["gnss"]["latency_ms"] == lat0   # nominal untouched
+    assert by_type(drone.meta0["robots"][0])["gnss"]["latency_ms"] == lat0   # nominal untouched
     drone.reset(None)
     assert float(m.body_mass[bid]) == mass0 and np.array_equal(m.actuator_gainprm[:4, 0], gain0)
 
@@ -100,7 +101,7 @@ def test_rover_variants_drive():
     drive = [m.actuator(a).id for a in sim.robot["drive"]]
     sim.reset(2)
     tq = sim.params["drive_torque"] * sim.params["drive_gain"]
-    assert np.allclose(sim.plant.tau_s, np.asarray(sim.meta0["robots"][0]["tau_stall"]) * tq)
+    assert np.allclose(sim.power.dynamic[0].tau_s, sim.meta0["robots"][0]["tau_stall"] * tq)
     sim.step(5000)                                                # 10 s
     assert sim.ctrls[0].err < 0.5
     assert np.all(np.abs(m.actuator_gainprm[drive, 0]) > 0)

@@ -34,6 +34,11 @@ class Battery(Component):
         self.publish("top", body, np.asarray(at.pos, float) + [-0.02, 0, bz], (0, 0, 1))
         robot.info["battery"] = self.spec
 
+    def contribute(self, robot, meta: dict) -> None:
+        if meta["power"]["battery"] is not None:
+            raise ValueError("one battery per robot (for now)")
+        meta["power"]["battery"] = dict(self.spec, part=self.part_name)
+
     def summary(self) -> str:
         s = self.spec
         return f"Battery: {self.part_name} ({s['cells']}S {s['chemistry']}, {s['capacity_mah']:.0f} mAh, {s['mass_g']:.0f} g)"
@@ -49,6 +54,11 @@ class Payload(Component):
     def attach(self, robot, at) -> None:
         at.body.mass_parts.append(MassPart(self.mass, np.asarray(at.pos, float), np.zeros((3, 3)), self.label))
         robot.info["avionics_w"] = robot.info.get("avionics_w", 0.0) + self.power
+
+    def contribute(self, robot, meta: dict) -> None:
+        if self.power:
+            meta["power"]["loads"].append({"type": "constant", "group": "avionics", "label": self.label,
+                                           "watts": self.power})
 
     def summary(self) -> str:
         return f"Payload: {self.label}, {self.mass:.2f} kg" + (f", {self.power:.0f} W" if self.power else "")
