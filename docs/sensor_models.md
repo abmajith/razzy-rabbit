@@ -176,7 +176,7 @@ closed. Whatever uncertainty remains becomes the domain-randomisation range in
 - Models are first-order: no temperature dependence of bias, no gyro g-sensitivity, and
   no satellite ephemeris (the constellation is a seeded random sky that rotates slowly).
 - Vibration is linear, with lumped transmissibilities rather than a frame FE model. The
-  real frame can have more modes. Razzy-rabbit's FEA can give them later.
+  real frame can have more modes. A frame FE analysis could give them later.
 - Camera images come from MuJoCo's rasteriser. Lighting, textures and foliage detail are
   the remaining visual gap. That is the job of the real-video step.
 - The Python sensor path runs at about 3× real time for the forest drone. Batched RL will

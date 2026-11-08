@@ -1,63 +1,19 @@
-# 🐇 Razzy-Rabbit Robotics Suite
+# 🐇 Razzy-Rabbit
 
-Razzy-Rabbit is a Linux-native, Python-based Engineering Suite designed for the rapid prototyping 
-and Finite Element Analysis (FEA) of robotic structures. 
-Razzy-Rabbit is built for automation, allowing developers to bridge the gap between 3D design 
-and real-world mechanical validation.
+Simulation-in-the-loop design of field robots (UAVs, agricultural and environmental
+rovers): size a vehicle from real parts, simulate it with grounded actuators, battery,
+sensors and latency, randomise what we don't know, and run it fast in a C++ core for
+training and analysis.
 
-## 🎯 Project Goals
-- Physics-Driven Design: Integrated GMSH (meshing) and CalculiX (solving) to validate robot parts before manufacturing.
-- Multi-Workspace Workflow: Manage multiple independent design tabs simultaneously.
-
-## 🛠 Prerequisites
-1. System Dependencies (Linux/Ubuntu)
-
-You must have the physical solvers installed on your host machine to handle the heavy math:
-Bash
-
-### Install the CalculiX Solver
+## Setup
+Linux, Python >= 3.11, [uv](https://docs.astral.sh/uv/), `cmake` and a C++17 compiler
+(for the C++ core, built automatically):
 ```bash
-sudo apt update && sudo apt install calculix-ccx
+sudo apt install cmake g++ libgl1 libegl1
+uv sync --extra sim
 ```
 
-### Ensure system has GL libraries for PyVista/VTK
-```bash
-sudo apt install libglu1-mesa
-```
-
-2. Python Environment
-
-This project uses uv for fast, reproducible dependency management and a src layout for clean packaging.
-## 🚀 Getting Started
-Installation
-
-Clone the repository and sync the environment using uv:
-```bash
-git clone https://github.com/yourusername/razzy-rabit.git
-cd razzy-rabit
-uv sync
-```
-
-## Running the Application
-
-To run the suite with GPU acceleration and the modular package structure:
-Bash
-
-### Launch the Gui Launcher
-```bash
-QT_QPA_PLATFORM=xcb DRI_PRIME=1 uv run python -m razzy_rabbit
-```
-
-### 🕹 Mechanical Workflow
-- Generate Geometry: Use 📁 Workspace -> 🛠 Samples to create a Robotic Link or Bracket.
-- Generate Volume Mesh: Navigate to 🔬 Analysis -> Generate Mesh (GMSH). This fills the hollow STL skin with a solid tetrahedral skeleton.
-- Define Physics (Picking):
-- Select Mark Fixed Support.
-    -  Left-Click vertices to add Red Squares (Constraints).
-    - Left-Click an existing square to Unselect it.
-    - Solve: The suite translates these markers into a CalculiX .inp file to solve the [K]u=f equilibrium equation.
-
-## 🌾 Simulation Environments (`sim/`)
+## Simulation environments (`sim/`)
 
 Procedural, reproducible MuJoCo environments for field robotics (UAVs, agricultural rovers,
 greenhouse harvesting), each with a reference controller already running. Scenes are
@@ -74,7 +30,7 @@ generated as plain MJCF, so the same files load from Python and from C/C++.
 | `mars_yard` | rocky yard driven by a **sized six-wheel rocker-bogie rover** (`rover_yard.toml`) |
 | `pond_survey` | example developer scene (`sim/custom/`): quadrotor orbiting a pond |
 
-### Install
+### Run
 ```bash
 uv sync --extra sim            # adds mujoco + imageio on top of the base environment
 ```
@@ -150,12 +106,3 @@ Drop a file into `sim/custom/` and it's picked up automatically. Start from
 **[docs/custom_scenes.md](docs/custom_scenes.md)** (builder API, terrain, vegetation, robots,
 custom controllers, wind, conventions, checklist). Internals and benchmarks:
 [sim/README.md](sim/README.md).
-
-#### 🗺 Future Directions
-- Post-Processing: Automated displacement and Von Mises Stress visualization directly in the 3D viewport.
-
-#### 📚 Documentation & Theory
-- For developers interested in the underlying mathematics:
-- CalculiX Manual: The "Bible" for the CCX solver (dhondt.de).
-- GMSH Reference: Finite element mesh generation (gmsh.info).
-- PyVista: Professional 3D visualization and mesh manipulation (docs.pyvista.org).

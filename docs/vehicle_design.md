@@ -142,7 +142,7 @@ P_bus = 4·V·I / η_esc + P_avionics     drawn from the battery
 - Terrain is rigid. There's no soil deformation or wheel sinkage, so `terrain_crr` stands in
   for soft-soil losses. For real terramechanics, Project Chrono is the next step.
 - Structure checks are first-order beam formulas. For the final frame, run the real part
-  through razzy-rabbit's FEA (GMSH + CalculiX).
+  through a proper FE analysis.
 
 ## Extending
 
