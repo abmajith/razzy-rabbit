@@ -165,7 +165,7 @@ P_bus = 4·V·I / η_esc + P_avionics     drawn from the battery
   and append a message to `violations` when it's not met.
 - **New vehicle type:** follow the same pattern: `evaluate` + `optimize` + `best` + `report` +
   `to_mjcf`, a plant class, and a scene that calls `best(config)` and `to_mjcf(...)`. See how
-  `mars_yard` in `sim/scenes.py` does it in about 10 lines.
+  `mars_yard` in `sim/scenes.py` does it (world features + `rover_design.to_mjcf`).
 
 ## Sensors
 

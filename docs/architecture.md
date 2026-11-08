@@ -212,21 +212,48 @@ robot, meta = rocker_bogie("rover", cfg, design)
 
 ### 3.5 `world/`: composable environments
 
+**Done (step 5).** A `World` applies features in the order they are added:
+
 ```python
-world = (World(seed=3, size=140)
-         .terrain(Hills(relief=9, octaves=6))
-         .add(Trail(width=2.5, wiggle=16))
-         .add(Forest(density=0.3, mix={"conifer": .55, "broadleaf": .3, "birch": .15},
-                     keep_clear=["trail"]))
-         .add(Rocks(count=90), Logs(count=40), Grass(count=3500))
-         .wind(Wind(speed=1.5, gust=0.5))
-         .lighting(Sun.random()))
+from sim.world import World, Clear, Uniform, PowerLaw
+from sim.world.features import PlantColours, Sun, Hills, Trail, Ground, Forest, Rocks, Logs, Grass, Wind
+
+w = World("forest_grounded", seed, half_size=70.0, resolution=561)
+w.add(PlantColours())                                   # seeded bark / leaf colour variation
+w.add(Sun(shadow_extent=40))                            # random time of day
+w.add(Hills(relief=9.0))                                # fBm terrain
+trail = w.add(Trail(amplitude=(16, 6), scale=(17, 6.5), cut_depth=0.25))
+w.add(Ground(FOREST_FLOOR, overlays={trail: DRY_SOIL})) # freezes + paints the terrain
+w.add(Forest(spacing=3.3, clear=[Clear(trail, 2.6)], narrow_near=(trail, {"conifer": 5.5, "broadleaf": 4.0})))
+w.add(Rocks(count=90, size=Uniform(0.3, 1.2), clear=[Clear(trail, 1.5)]))
+w.add(Logs(count=40, clear=[Clear(trail, 4.0)]))
+w.add(Grass(count=3500))
+w.add(Wind(speed=1.5, gust=0.5))
+route = trail.path(xs, height_agl=2.0)                  # the mission route
 ```
 
-Each feature (`Hills`, `Trail`, `Forest`, `Rocks`, `Logs`, `Grass`, `Craters`, `Lander`, and
-later `Orchard`, `CropBeds`, `Pond`...) is one class: parameters, placement with its own seeded stream, and geometry through the
-existing mesh batching. Features can expose *named regions* (`"trail"`, `"rows"`) that
-others avoid or follow, and that missions use as paths.
+- **Order is generation order.** It decides which random numbers each feature draws (one
+  seeded stream per scene, so the same seed gives the same world) and which features can
+  see which.
+- **Terrain is built in two phases.** Shaping features (`Hills`, `Craters`, `Trail`) edit
+  the height grid. The first feature that needs heights freezes it, and shaping after that
+  is an error.
+- **Paths and objects are regions.** `distance(x, y)`, so others keep clear with
+  `Clear(region, metres)`. With `larger_than=...`, only objects above a size must keep clear;
+  for example, boulders stay off the rover loop while climbable rocks may lie on it.
+
+| file | features |
+|---|---|
+| `features/terrain_shapes.py` | `Hills`, `Craters` |
+| `features/paths.py` | `Trail`, `DriveLoop` (regions + mission routes) |
+| `features/ground.py` | `Ground` + palettes (`FOREST_FLOOR`, `DRY_SOIL`, `MARS_SOIL`, `GRASS`) |
+| `features/vegetation.py` | `PlantColours`, `Forest` (species mix, crown clearance), `Grass` |
+| `features/objects.py` | `Rocks` (any size distribution, sink, keep-clear rules), `Logs`, `Lander` |
+| `features/sky.py` | `Sun`, `Wind` |
+
+Building blocks: `terrain.py` (heightfields, textures), `flora.py` (one tree, rock or tuft),
+`sampling.py` (Poisson-disk placement, `Uniform`, `PowerLaw`, `Clear`). Later features
+(`Orchard`, `CropBeds`, `Pond`...) follow the same pattern: parameters, then `apply(world)`.
 
 ### 3.6 `control/`: one interface, chainable
 
@@ -256,13 +283,27 @@ estimator) is an explicit, visible switch. That switch is the sim-to-real bounda
 
 ### 3.7 `scenes/`: short compositions
 
+**Done (step 5)** for the world part: `sim/scenes.py` now holds both scenes as
+compositions of about 25 lines each (world features, the sized vehicle, a route). The
+`task` part, `FollowPath(...)` instead of controller names in the meta, comes with
+`control/` in step 6:
+
 ```python
 @scene
-def forest_inspection(seed=0):
-    world = forest_world(seed)                               # a reusable world recipe
-    robot = quadrotor(**design.best("drone_forest.toml"))    # sized from the mission file
-    task = FollowPath(world.path("trail"), speed=3, altitude_agl=2)
-    return Scene(world, robot, task, uncertainty="drone_forest.toml")
+def mars_yard(seed=0):
+    cfg, best = rover_design.best("rover_yard.toml")
+    w = World("mars_yard", seed, half_size=40.0, resolution=401)
+    w.add(Sun(overcast=0.1, shadow_extent=30, sky_top=[.55, .45, .40], sky_horizon=[.85, .68, .52], haze=0.45))
+    w.add(Hills(relief=1.2)); w.add(Hills(relief=0.08, octaves=3, base=24))
+    w.add(Craters(count=7, extent=30, radius=(2.5, 7), clear_radius=6))
+    w.add(Ground(MARS_SOIL))
+    loop = w.add(DriveLoop(corners=8, radius=(9, 14), start=(0.0, -3.0)))
+    lander = Lander(pos=(0.0, 3.0))
+    w.add(Rocks(count=900, size=PowerLaw(0.04, 0.09, cap=1.8), sink=0.3, colour=[.42, .26, .18],
+                clear=[Clear(loop, 2.2, larger_than=0.6 * best.m["climb_m"]), Clear(lander, 4.0)]))
+    w.add(lander)
+    rover_design.to_mjcf(w.builder, "rover", w.ground_point(*loop.start, clearance=...), best, cfg)
+    ...
 ```
 
 **Describing a scene is not running it.** A scene file is only *read once* to build the
@@ -280,8 +321,14 @@ about which notation is more convenient for describing scenes.
                                                            sensors -> view / render / train
 ```
 
-Only the two grounded scenes are kept: `forest_grounded` (renamed `forest_inspection`)
-and `mars_yard`. Each should shrink to roughly 10–30 lines.
+Only the two grounded scenes are kept: `forest_grounded` and `mars_yard`. While there are
+two, they stay in one file (`scenes.py`) rather than a `scenes/` package, and the planned
+rename `forest_grounded` → `forest_inspection` is deferred (purely cosmetic).
+
+Proof of no change for step 5: the regenerated terrain, texture and mesh files are
+byte-identical, the compiled models match by name, and trajectories, battery and sensor
+samples are bit-identical. The only file differences are ordering: the wind entry in the
+forest's `meta.json`, and the rock material moving in the Mars `scene.xml`.
 
 ### 3.8 `design/`: sizing over templates
 
@@ -370,7 +417,7 @@ A new component brings its uncertain parameters along. No central list to edit.
 | 2 ✓ | remove the demo scenes, idealised robots and their controllers; then `parts/` + `physics/` | grounded-scene tests pass; unit tests per formula; sizing results identical to today |
 | 3 ✓ | `components/` + `robots/` + templates; quad and rover rebuilt from components | compiled models, sizing and trajectories bit-identical; existing tests pass |
 | 4 ✓ | generic `runtime/power.py` + `runtime/sensors.py` | same battery and sensor results as `DronePlant` / `RoverPlant` / `SensorSuite` |
-| 5 | `world/` features + the two scenes as compositions | same scenes, rendered side by side; tests pass |
+| 5 ✓ | `world/` features + the two scenes as compositions | same scenes, rendered side by side; tests pass |
 | 6 | `control/` interface + chains | same trajectories as today's controllers |
 | 7 | C++ core made component-generic | equivalence tests against the Python reference (as now) |
 | 8 | tutorial: "a new robot and scene in 30 lines" | you write one |

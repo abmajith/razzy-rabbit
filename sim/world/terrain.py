@@ -125,3 +125,16 @@ def resample(a: np.ndarray, n: int) -> np.ndarray:
     r = np.linspace(0, a.shape[0] - 1, n).astype(int)
     c = np.linspace(0, a.shape[1] - 1, n).astype(int)
     return a[np.ix_(r, c)]
+
+
+def noise2(nr: int, nc: int, rng: np.random.Generator, **kw) -> np.ndarray:
+    """fBm noise resampled to an (nr, nc) grid."""
+    n = max(nr, nc)
+    f = fbm(n, rng, **kw)
+    return f[np.ix_(np.linspace(0, n - 1, nr).astype(int), np.linspace(0, n - 1, nc).astype(int))]
+
+
+def smoothstep(e0, e1, x):
+    """0 below e0, 1 above e1, smooth (3t^2 - 2t^3) in between."""
+    t = np.clip((x - e0) / (e1 - e0), 0, 1)
+    return t * t * (3 - 2 * t)

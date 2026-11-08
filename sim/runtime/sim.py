@@ -11,7 +11,7 @@ from .. import scenes as _scenes  # noqa: F401  (registers the scenes)
 from ..builder import GENERATED
 from ..control import CONTROLLERS
 from ..physics.aero import WindField
-from ..terrain import Terrain
+from ..world.terrain import Terrain
 
 
 def scene_dir(name: str, seed: int):
