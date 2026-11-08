@@ -1,0 +1,147 @@
+# Propulsion: brushless motors and propellers
+#
+# Datasheet values only: no code reads a specific part. Values are representative of
+# commonly available parts (rounded from typical datasheets), NOT vendor-certified: copy
+# your real parts' datasheet numbers in here. Add a part by adding a [section.name] block.
+#
+# Units: SI unless the key says otherwise (_g grams, _mm millimetres, _in inches,
+#        _mah milliamp-hours, kv rpm/V).
+
+# =====================================================================================
+# DRONE: brushless outrunner motors
+#   kv        rpm per volt          r_ohm     winding resistance
+#   i0        no-load current [A]   i_max     max continuous current [A]
+#   cells     supported LiPo cell count range [min, max]
+#   prop_in   supported prop diameter range [min, max] inches
+#   stator_mm stator diameter (used for rotor inertia + visual size)
+# =====================================================================================
+[motor.m1404_3000kv]
+kv = 3000
+r_ohm = 0.20
+i0 = 0.5
+i_max = 12
+mass_g = 9
+stator_mm = 14
+cells = [3, 4]
+prop_in = [3.0, 3.5]
+
+[motor.m2004_1700kv]
+kv = 1700
+r_ohm = 0.12
+i0 = 0.6
+i_max = 22
+mass_g = 20
+stator_mm = 20
+cells = [4, 6]
+prop_in = [4.0, 5.1]
+
+[motor.m2207_1750kv]
+kv = 1750
+r_ohm = 0.070
+i0 = 1.2
+i_max = 40
+mass_g = 32
+stator_mm = 22
+cells = [5, 6]
+prop_in = [5.0, 5.1]
+
+[motor.m2207_2550kv]
+kv = 2550
+r_ohm = 0.045
+i0 = 1.6
+i_max = 45
+mass_g = 32
+stator_mm = 22
+cells = [4, 4]
+prop_in = [5.0, 5.1]
+
+[motor.m2806_1300kv]
+kv = 1300
+r_ohm = 0.070
+i0 = 1.0
+i_max = 35
+mass_g = 47
+stator_mm = 28
+cells = [4, 6]
+prop_in = [6.0, 7.0]
+
+[motor.m3110_900kv]
+kv = 900
+r_ohm = 0.090
+i0 = 0.8
+i_max = 40
+mass_g = 77
+stator_mm = 31
+cells = [6, 6]
+prop_in = [8.0, 9.0]
+
+[motor.m4006_620kv]
+kv = 620
+r_ohm = 0.150
+i0 = 0.5
+i_max = 25
+mass_g = 66
+stator_mm = 40
+cells = [4, 6]
+prop_in = [10.0, 13.0]
+
+# =====================================================================================
+# DRONE: propellers (static coefficients, n in rev/s, D in m)
+#   thrust T = ct * rho * n^2 * D^4        shaft power P = cp * rho * n^3 * D^5
+#   blades: sets the blade-pass vibration frequency (blades x rotor speed)
+# =====================================================================================
+[prop.p3x3_tri]
+diameter_in = 3.0
+ct = 0.13
+cp = 0.070
+mass_g = 2.0
+blades = 3
+
+[prop.p4x3_bi]
+diameter_in = 4.0
+ct = 0.11
+cp = 0.050
+mass_g = 3.0
+blades = 2
+
+[prop.p5x3_bi]
+diameter_in = 5.0
+ct = 0.10
+cp = 0.045
+mass_g = 3.5
+blades = 2
+
+[prop.p5x4_tri]
+diameter_in = 5.1
+ct = 0.16
+cp = 0.100
+mass_g = 4.5
+blades = 3
+
+[prop.p6x3_bi]
+diameter_in = 6.0
+ct = 0.105
+cp = 0.046
+mass_g = 6.0
+blades = 2
+
+[prop.p7x4_bi]
+diameter_in = 7.0
+ct = 0.11
+cp = 0.050
+mass_g = 9.0
+blades = 2
+
+[prop.p9x4_bi]
+diameter_in = 9.0
+ct = 0.11
+cp = 0.046
+mass_g = 12.0
+blades = 2
+
+[prop.p10x4_bi]
+diameter_in = 10.0
+ct = 0.11
+cp = 0.045
+mass_g = 16.0
+blades = 2

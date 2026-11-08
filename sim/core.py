@@ -20,11 +20,11 @@ import mujoco
 import numpy as np
 
 from . import uncertainty as U
-from .design.common import CHEMISTRY
+from .physics.battery import CHEMISTRY
 from .runtime import Sim, load_terrain, scene_dir
 from .sensing.models import DelayLine, latency_sampler
 from .sensing.suite import FOLIAGE_WORDS
-from .wind import WindField
+from .physics.aero import WindField
 
 MODES = {"mission": 0, "setpoint": 1, "ctrl": 2}
 CORE_CONTROLLERS = {"quad_waypoints", "rover_ackermann", None}

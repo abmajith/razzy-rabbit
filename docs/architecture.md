@@ -70,22 +70,27 @@ An arrow means "uses". Nothing uses a layer above itself.
 
 ### 3.1 `parts/`: datasheets only
 
-Today's `components.toml` split by domain, so each file stays short:
+**Done (step 2).** The old `components.toml` split by domain, so each file stays short
+(section names unchanged, so mission files did not change):
 
 ```
 parts/
-  propulsion.toml   motor.*, prop.*, esc.*
-  energy.toml       battery.* (+ chemistry OCV curves, moved out of Python)
-  drive.toml        gearmotor.*, wheel.*, servo.*
-  structure.toml    tube.*, plate.*, material.*
+  propulsion.toml   motor.*, prop.*
+  energy.toml       battery.*, chemistry.* (OCV curves, moved out of Python)
+  drive.toml        wheel.*, drive_motor.*, steer_servo.*
+  structure.toml    arm_tube.*, rover_tube.*, frame
+  electronics.toml  avionics.* (fixed payload boards)
   sensors.toml      imu.*, baro.*, mag.*, gnss.*, depth_camera.*, rgb_camera.*
-  compute.toml      computer.* (mass, power, inference times)
+  compute.toml      compute.* (inference times)
 ```
 
 `parts.get("motor", "m2004_1700kv")` returns the dict and tells you the valid names if
 you mistype. Every part may carry `source = "datasheet" | "measured" | "guess"`.
 
 ### 3.2 `physics/`: pure functions, no MuJoCo
+
+**Done (step 2).** Sizing results, generated scenes and trajectories are bit-identical to
+before the move.
 
 Each file is one domain: equations in the docstring, and functions that work on numbers
 or numpy arrays.

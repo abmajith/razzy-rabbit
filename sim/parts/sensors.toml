@@ -1,0 +1,145 @@
+# Sensors: datasheet numbers that drive the sensor models
+#
+# Datasheet values only: no code reads a specific part. Values are representative of
+# commonly available parts (rounded from typical datasheets), NOT vendor-certified: copy
+# your real parts' datasheet numbers in here. Add a part by adding a [section.name] block.
+#
+# Units: SI unless the key says otherwise (_g grams, _mm millimetres, _in inches,
+#        _mah milliamp-hours, kv rpm/V).
+
+# =====================================================================================
+# SENSORS: datasheet numbers that drive the sensor models (sim/sensing/models.py)
+#   Chosen per vehicle in the mission file's [sensors] table. Mass/power of the boards
+#   that carry them stay in [avionics.*]. Values are representative datasheet figures,
+#   rounded; biases are RESIDUALS after the usual power-up calibration. Replace them with
+#   your own measurements (stationary log -> Allan deviation, see docs/sensor_models.md).
+# =====================================================================================
+[imu.icm42688p]
+note = "TDK ICM-42688-P, common in current flight controllers"
+rate_hz = 1000                    # rate the flight stack consumes (chip runs up to 32 kHz)
+gyro_noise_dps_rthz = 0.0028      # rate noise density
+gyro_bias_dps = 0.05              # residual turn-on bias after at-rest calibration (raw ZRO +-0.5)
+gyro_bias_instability_dph = 8     # in-run bias wander (Gauss-Markov sigma)
+accel_noise_ug_rthz = 70
+accel_bias_mg = 5                 # residual after calibration (raw +-20 mg)
+accel_bias_instability_ug = 40
+bias_tau_s = 200
+scale_error_pct = 0.5
+misalign_deg = 0.2
+gyro_range_dps = 2000
+accel_range_g = 16
+bits = 16
+aaf_hz = 258                      # on-chip anti-alias filter corner
+latency_ms = 1
+
+[imu.bmi088]
+note = "Bosch BMI088, vibration-robust IMU used in Pixhawk-class autopilots"
+rate_hz = 1000
+gyro_noise_dps_rthz = 0.014
+gyro_bias_dps = 0.05
+gyro_bias_instability_dph = 10
+accel_noise_ug_rthz = 175
+accel_bias_mg = 5
+accel_bias_instability_ug = 50
+bias_tau_s = 200
+scale_error_pct = 0.5
+misalign_deg = 0.3
+gyro_range_dps = 2000
+accel_range_g = 24
+bits = 16
+aaf_hz = 230
+latency_ms = 1
+
+[baro.bmp390]
+note = "Bosch BMP390"
+rate_hz = 50
+noise_pa = 1.2                    # RMS at the flight setting (oversampling, IIR); 1 Pa ~ 8.5 cm
+offset_pa = 3                     # relative accuracy over the flight
+drift_pa = 6                      # slow drift (temperature, weather) over minutes
+drift_tau_s = 300
+lsb_pa = 0.016
+latency_ms = 20                   # IIR filter + bus
+
+[baro.dps310]
+note = "Infineon DPS310"
+rate_hz = 32
+noise_pa = 0.5
+offset_pa = 6
+drift_pa = 6
+drift_tau_s = 300
+lsb_pa = 0.016
+latency_ms = 30
+
+[mag.ist8310]
+note = "iSentek IST8310, typical GNSS-puck compass"
+rate_hz = 50
+noise_ut = 0.3
+hard_iron_ut = 1.5                # residual after compass calibration
+soft_iron_pct = 2.0
+latency_ms = 5
+
+[gnss.ublox_m10]
+note = "u-blox M10, 4 concurrent constellations, single-frequency"
+rate_hz = 10
+cep_m = 1.5                       # horizontal CEP50, open sky
+vel_acc_mps = 0.05
+sats_open_sky = 28                # satellites above the elevation mask with a clear sky
+min_elevation_deg = 10
+min_sats = 5                      # below this the receiver reports no fix
+bias_tau_s = 60                   # atmospheric error correlation time
+multipath_m = 4.0                 # extra error at fully blocked sky (reflections off trunks)
+multipath_tau_s = 8
+foliage_loss = 0.5                # chance a satellite signal is lost per crossing of a leaf layer
+latency_ms = [60, 110]
+
+[gnss.ublox_f9p_rtk]
+note = "u-blox F9P dual-band with RTK corrections (needs a base station + link)"
+rate_hz = 10
+cep_m = 0.02
+vel_acc_mps = 0.02
+sats_open_sky = 32
+min_elevation_deg = 10
+min_sats = 8
+bias_tau_s = 60
+multipath_m = 1.5
+multipath_tau_s = 8
+foliage_loss = 0.5
+latency_ms = [40, 80]
+
+[depth_camera.oakd_lite_stereo]
+note = "OAK-D Lite stereo pair (2x OV7251, global shutter) at 640x480"
+width = 640
+height = 480
+hfov_deg = 73.0
+vfov_deg = 58.0
+baseline_m = 0.075
+subpixel_sigma_px = 0.10          # disparity matching noise (textured scene)
+subpixel_bits = 3                 # 1/8 px disparity steps
+min_m = 0.35
+max_m = 10.0
+lr_check = true                   # left-right consistency: drops occluded edge pixels
+min_texture = 0.0                 # local intensity std below which matching fails (real: ~0.01).
+                                  # Off by default: procedural textures are smoother than real
+                                  # surfaces, so this would measure the renderer, not the camera.
+                                  # Enable once scenes use photo/video textures.
+match_window = 7
+rate_hz = 30
+latency_ms = [30, 50]
+
+[rgb_camera.oakd_lite_rgb]
+note = "OAK-D Lite colour camera (IMX214, rolling shutter)"
+width = 1920
+height = 1080
+hfov_deg = 68.8
+vfov_deg = 54.0
+shutter = "rolling"
+readout_ms = 28                   # top-to-bottom row readout time
+exposure_ms = [0.1, 33.0]         # auto-exposure range
+exposure_ref_ms = 4.0             # exposure at which the renderer's brightness is "correct"
+ae_target = 0.45
+max_gain = 16
+shot_noise_dn = 0.35
+read_noise_dn = 1.2
+vignetting = 0.3
+rate_hz = 30
+latency_ms = [40, 70]

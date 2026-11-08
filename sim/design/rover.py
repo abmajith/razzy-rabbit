@@ -5,10 +5,8 @@ Suspension: on each side a *rocker* (pivoting on the body) carries the front whe
 left and right rockers rotate in opposite directions, so the body pitches at the mean of
 the two. All six wheels are driven, and the four corner wheels steer (Curiosity-style).
 
-Drive motors use the linear brushed-DC gearmotor model at the output shaft:
-    torque  tau = tau_s * (u - omega / omega_0)        u in [-1, 1] = PWM duty
-    current I   = I_0 + (I_s - I_0) * tau / tau_s
-with tau_s and omega_0 scaled by (pack voltage / motor rated voltage).
+Drive motors use the linear brushed-DC gearmotor model (physics.dc_motor); wheel torques,
+tip-over and steering clearance come from physics.vehicle, rocker stress from physics.beam.
 """
 from __future__ import annotations
 
@@ -18,18 +16,18 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .common import Pack, components, fmt_table, load_toml, select
+from ..physics import beam, dc_motor, vehicle
+from ..physics.battery import Pack
+from .common import components, fmt_table, load_toml, select
 
 
 STEER_LOCK_DEG = 40.0   # corner steering range (joint limit in the generated model)
 
 
 def tube_props(t: dict) -> tuple[float, float, float]:
-    """Square tube: (linear density kg/m, second moment m^4, half-depth m)."""
-    a, w = t["side_mm"] / 1000, t["wall_mm"] / 1000
-    A = a * a - (a - 2 * w) ** 2
-    I = (a ** 4 - (a - 2 * w) ** 4) / 12
-    return t["density"] * A, I, a / 2
+    """Square tube part: (linear density kg/m, second moment m^4, half-depth m)."""
+    A, I, c = beam.square_tube(t["side_mm"] / 1000, t["wall_mm"] / 1000)
+    return t["density"] * A, I, c
 
 
 @dataclass
@@ -77,30 +75,29 @@ def evaluate(cfg: dict, db: dict, wheel_n, motor_n, batt_n, tube_n) -> RoverDesi
                + 4 * servo["mass_g"] / 1000)
     # track depends on CG height which depends on track (diff bar mass) -> iterate twice
     # steered corner wheels swing inward by r*sin(lock) at full lock: keep them off the body
-    track_geom = body["width_m"] + w + 2 * r * math.sin(math.radians(STEER_LOCK_DEG)) + 0.06
+    track_geom = body["width_m"] + w + 2 * vehicle.steer_swing(r, STEER_LOCK_DEG) + 0.06
     track = track_geom
     for _ in range(3):
         m_tubes = lin * (2 * tube_len_side + track)
         mass = (m_fixed + 6 * m_wheel_unit + m_tubes) * 1.08               # +8% fasteners, cabling
         h_cg = ((m_fixed * H + 6 * m_wheel_unit * r + m_tubes * (H + r) / 2) * 1.08) / mass
-        track_tip = 2 * h_cg * math.tan(math.radians(mis["max_slope_deg"] + mis["tip_margin_deg"]))
+        track_tip = vehicle.track_for_tip_angle(h_cg, mis["max_slope_deg"] + mis["tip_margin_deg"])
         track = max(track_geom, track_tip)
     width, length = track + w, 2 * s + 2 * r
 
     # ---- drive ----
-    th = math.radians(mis["max_slope_deg"])
-    tau_s, w0 = motor["stall_torque"] * ratio, motor["no_load_rpm"] * 2 * math.pi / 60 * ratio
-    i0, i_s = motor["no_load_current"], motor["stall_current"] * ratio
-    tau_flat = mass * g * mis["terrain_crr"] * r / 6
-    tau_slope = mass * g * (math.sin(th) + mis["terrain_crr"] * math.cos(th)) * r / 6
-    tau_trac = mis["terrain_mu"] * mass * g * r / 6
-    v_flat = w0 * (1 - tau_flat / tau_s) * r
-    v_slope = w0 * (1 - tau_slope / tau_s) * r
+    gm = dc_motor.gearmotor_at_voltage(motor, ratio)
+    tau_s, w0, i0, i_s = gm["tau_s"], gm["omega_0"], gm["i0"], gm["i_s"]
+    tau_flat = vehicle.wheel_torque_rolling(mass, g, mis["terrain_crr"], r, 6)
+    tau_slope = vehicle.wheel_torque_slope(mass, g, mis["max_slope_deg"], mis["terrain_crr"], r, 6)
+    tau_trac = vehicle.wheel_torque_traction(mis["terrain_mu"], mass, g, r, 6)
+    v_flat = dc_motor.gearmotor_speed(tau_flat, tau_s, w0) * r
+    v_slope = dc_motor.gearmotor_speed(tau_slope, tau_s, w0) * r
 
     # energy at cruise on flat ground
     v = mis["cruise_speed_mps"]
-    u = min(v / r / w0 + tau_flat / tau_s, 1.0)
-    i_mot = i0 + (i_s - i0) * tau_flat / tau_s
+    u = min(dc_motor.gearmotor_duty(v / r, tau_flat, tau_s, w0), 1.0)
+    i_mot = dc_motor.gearmotor_current(tau_flat, i0, i_s, tau_s)
     p_drive = 6 * pack.v_nom * u * i_mot
     p_total = p_drive + body["avionics_w"] + 4 * servo["power_w"]
     e_use = pack.energy_wh * (1 - mis["reserve_frac"])
@@ -109,11 +106,11 @@ def evaluate(cfg: dict, db: dict, wheel_n, motor_n, batt_n, tube_n) -> RoverDesi
 
     # structure: rocker front leg as cantilever, 2 g vertical load on the front wheel
     F = 2 * mass * g / 6
-    stress = F * s * c_t / I_t / 1e6
-    tip_lat = math.degrees(math.atan2(track / 2, h_cg))
-    tip_lon = math.degrees(math.atan2(s, h_cg))
+    stress = beam.bending_stress_mpa(F * s, c_t, I_t)
+    tip_lat = vehicle.tip_over_angle_deg(track / 2, h_cg)
+    tip_lon = vehicle.tip_over_angle_deg(s, h_cg)
     contact = 0.35 * r
-    pressure = mass * g / 6 / (w * contact) / 1000
+    pressure = vehicle.contact_pressure_kpa(mass * g / 6, w, contact)
 
     d.m = dict(mass_kg=mass, width_m=width, length_m=length, track_m=track, wheel_r=r, h_cg=h_cg,
                range_km=range_km, cruise_w=p_total, v_flat=v_flat, v_slope=v_slope,

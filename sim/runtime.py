@@ -11,7 +11,7 @@ from . import scenes as _scenes  # noqa: F401  (registers sim/custom controllers
 from .builder import GENERATED
 from .control import CONTROLLERS
 from .terrain import Terrain
-from .wind import WindField
+from .physics.aero import WindField
 
 
 def scene_dir(name: str, seed: int):

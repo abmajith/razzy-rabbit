@@ -1,13 +1,10 @@
-"""Quadrotor sizing (physics + exhaustive search) and MJCF generation.
+"""Quadrotor sizing (exhaustive search over parts) and MJCF generation.
 
-Model chain for one motor at thrust T (static, per rotor):
-    n   = sqrt(T / (ct rho D^4))                 prop speed [rev/s]
-    P_m = cp rho n^3 D^5,  Q = P_m / (2 pi n)    shaft power, torque
-    I   = Q / Kt + I0,     Kt = 60 / (2 pi KV)   motor current
-    V   = omega Kt + I R                         motor voltage (back-EMF + copper drop)
-    P_e = V I / eta_esc                          drawn from the bus
-Bus voltage comes from the pack model (OCV(soc) - I R). Max thrust is where the motor
-needs more voltage than the ESC can give, or exceeds its current limit.
+The equations live in sim/physics (propeller, dc_motor, battery, beam); this file is the
+sizing logic: per rotor at thrust T the motor + prop operating point gives current and
+voltage (physics.propeller.rotor_point), the bus draws 4 V I / eta_esc + avionics from the
+pack (physics.battery), and the max thrust is where the motor needs more voltage than the
+ESC can give, exceeds its current limit, or the pack its C-rating.
 """
 from __future__ import annotations
 
@@ -17,26 +14,15 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .common import Pack, components, fmt_table, load_toml, select
+from ..physics import beam, dc_motor, propeller
+from ..physics.battery import Pack, soc_at_cutoff
+from ..physics.propeller import rotor_point
+from .common import components, fmt_table, load_toml, select
 
-IN = 0.0254
+IN = propeller.INCH
 
 
 # ------------------------------------------------------------------------- physics ---
-def rotor_point(T, motor: dict, prop: dict, rho: float) -> dict:
-    """Operating point of one motor+prop producing thrust T [N] (vectorised in T)."""
-    T = np.maximum(np.asarray(T, float), 0.0)
-    D = prop["diameter_in"] * IN
-    n = np.sqrt(T / (prop["ct"] * rho * D ** 4))
-    w = 2 * np.pi * n
-    Pm = prop["cp"] * rho * n ** 3 * D ** 5
-    Kt = 60.0 / (2 * np.pi * motor["kv"])
-    Q = np.where(w > 0, Pm / np.maximum(w, 1e-9), 0.0)
-    I = Q / Kt + motor["i0"]
-    V = w * Kt + I * motor["r_ohm"]
-    return dict(n=n, w=w, Q=Q, I=I, V=V, Pe=V * I, Pm=Pm)
-
-
 def bus_state(T_each, n_rot, motor, prop, pack: Pack, soc, rho, esc_eff, p_avionics):
     op = rotor_point(T_each, motor, prop, rho)
     p_bus = n_rot * float(op["Pe"]) / esc_eff + p_avionics
@@ -55,13 +41,6 @@ def max_thrust(motor, prop, pack: Pack, soc, rho, esc_eff, duty, p_avionics, n_r
         mid = 0.5 * (lo + hi)
         lo, hi = (mid, hi) if ok(mid) else (lo, mid)
     return lo
-
-
-def soc_at_cutoff(pack: Pack) -> float:
-    """State of charge where OCV hits the end-of-discharge level used for min TWR."""
-    socs = np.linspace(0, 1, 201)
-    v = np.array([pack.ocv(s) for s in socs])
-    return float(socs[np.argmax(v >= pack.v_cut + 0.1 * pack.cells)])
 
 
 # -------------------------------------------------------------------------- design ---
@@ -98,7 +77,7 @@ def evaluate(cfg: dict, db: dict, motor_name, prop_name, batt_name, tube_name) -
     p_av = sum(p["power_w"] for p in payload)
 
     # geometry: adjacent prop tips separated by clearance * D
-    D = prop["diameter_in"] * IN
+    D = propeller.diameter_m(prop)
     L = max(D * (1 + ds["prop_clearance"]) / math.sqrt(2), ds["min_arm_m"])
     cage_gap = 0.012
     span = 2 * L + D + (2 * (cage_gap + 0.004) if mis["cage"] else 0.0)
@@ -106,12 +85,11 @@ def evaluate(cfg: dict, db: dict, motor_name, prop_name, batt_name, tube_name) -
     # structure: thin-walled tube cantilever
     od, idd = tube["od_mm"] / 1000, tube["id_mm"] / 1000
     E = tube["e_gpa"] * 1e9
-    Ia = math.pi / 64 * (od ** 4 - idd ** 4)
-    A = math.pi / 4 * (od ** 2 - idd ** 2)
+    A, Ia = beam.round_tube(od, idd)
     m_arm = tube["density"] * A * L
     m_motor, m_prop = motor["mass_g"] / 1000, prop["mass_g"] / 1000
     m_tip = m_motor + m_prop + fr["motor_mount_g"] / 1000
-    f_arm = 1 / (2 * math.pi) * math.sqrt(3 * E * Ia / (L ** 3 * (m_tip + 0.236 * m_arm)))
+    f_arm = beam.cantilever_first_mode_hz(E, Ia, L, m_tip, m_arm)
 
     # mass budget
     m_cage = 0.0
@@ -132,22 +110,22 @@ def evaluate(cfg: dict, db: dict, motor_name, prop_name, batt_name, tube_name) -
     op_h, p_hover, v_h, i_h = bus_state(T_hover, 4, motor, prop, pack, soc_nom, rho, esc, p_av)
     e_use = pack.energy_wh * (1 - mis["reserve_frac"])
     endurance = e_use / (p_hover * mis["maneuver_factor"]) * 60
-    deflect = (T_max_nom * L ** 3) / (3 * E * Ia)
+    deflect = beam.cantilever_tip_deflection(T_max_nom, L, E, Ia)
 
-    # motor/prop speed loop time constant (linearised):  J dw/dt = Kt^2/R (V/Kt - w) - kq w^2
-    Kt = 60.0 / (2 * math.pi * motor["kv"])
+    # motor/prop speed loop time constant (physics.dc_motor docstring)
+    Kt = dc_motor.torque_constant(motor["kv"])
     r_rotor = 0.5 * motor["stator_mm"] / 1000 + 0.003
-    J = 0.5 * m_motor * r_rotor ** 2 + m_prop * D ** 2 / 24
-    kq = prop["cp"] * rho * D ** 5 / (8 * math.pi ** 3)
+    J = dc_motor.rotor_inertia(m_motor, r_rotor) + propeller.inertia(m_prop, D)
+    kq = propeller.drag_torque_coef(D, prop["cp"], rho)
     w_h = float(op_h["w"])
-    tau_motor = J / (2 * kq * w_h + Kt * Kt / motor["r_ohm"]) if w_h > 0 else 0.05
+    tau_motor = dc_motor.speed_loop_time_constant(J, kq, w_h, Kt, motor["r_ohm"])
 
     d.m = dict(mass_kg=mass, span_m=span, arm_m=L, hover_w=p_hover, hover_a=i_h,
                endurance_min=endurance, twr_nom=4 * T_max_nom / (mass * g),
                twr_end=4 * T_max_end / (mass * g), t_max_n=T_max_nom, t_hover_n=T_hover,
                hover_throttle=T_hover / max(T_max_nom, 1e-9), hover_rpm=float(op_h["n"]) * 60,
                arm_freq_hz=f_arm, arm_deflect_frac=deflect / L, max_motor_a=float(rotor_point(T_max_nom, motor, prop, rho)["I"]),
-               tau_motor_s=tau_motor, k_yaw=prop["cp"] * D / (2 * math.pi * prop["ct"]),
+               tau_motor_s=tau_motor, k_yaw=propeller.yaw_moment_coef(D, prop["ct"], prop["cp"]),
                g_per_w=T_hover / g * 1000 / (float(op_h["Pe"]) / esc), cage_kg=m_cage, frame_kg=m_frame,
                payload_kg=m_payload, battery_kg=pack.mass, avionics_w=p_av)
     d.geo = dict(D=D, L=L, tube_od=od, cage=mis["cage"], cage_gap=cage_gap, m_arm=m_arm,

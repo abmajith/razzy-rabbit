@@ -11,7 +11,7 @@ import pytest
 pytest.importorskip("mujoco")
 pytest.importorskip("razzy_core")
 
-from sim.core import CoreBatch, CoreSim, make_sim  # noqa: E402
+from sim.core import CoreBatch, CoreSim  # noqa: E402
 from sim.design.common import components  # noqa: E402
 from sim.runtime import Sim  # noqa: E402
 

@@ -15,12 +15,12 @@ gravity = 9.81
 cage = true                # protective cage around props (collision tolerant, heavier)
 
 [payload]
-# fixed items from [avionics.*] in components.toml
+# fixed items from [avionics.*] in sim/parts/electronics.toml
 items = ["fc_stack_h7", "gnss_m10", "lora_868", "oakd_lite", "pi_zero2w"]
 extra_mass_g = 0           # anything else you carry (sensors, mounts)
 
 [design_space]
-# "all" or a list of names from components.toml
+# "all" or a list of part names from sim/parts/*.toml
 motors = "all"
 props = "all"
 batteries = "all"
@@ -36,7 +36,7 @@ min_arm_freq_hz = 80             # first bending mode of an arm with motor at th
 maximize = "endurance"     # "endurance" | "twr" | "min_mass"
 
 [sensors]
-# parts from components.toml; delete a line to fly without that sensor
+# parts from sim/parts/sensors.toml; delete a line to fly without that sensor
 imu = "icm42688p"
 baro = "bmp390"
 mag = "ist8310"
@@ -62,7 +62,7 @@ inclination_deg = 62
 declination_deg = 2.5
 
 [compute]
-part = "oakd_myriadx"         # where the policy runs (components.toml [compute.*])
+part = "oakd_myriadx"         # where the policy runs (sim/parts/compute.toml)
 
 [uncertainty]
 # How well do we know each number? Sim(variant=k) / `python -m sim randomize` draws one

@@ -1,0 +1,83 @@
+# Drive: wheels, gearmotors, steering servos
+#
+# Datasheet values only: no code reads a specific part. Values are representative of
+# commonly available parts (rounded from typical datasheets), NOT vendor-certified: copy
+# your real parts' datasheet numbers in here. Add a part by adding a [section.name] block.
+#
+# Units: SI unless the key says otherwise (_g grams, _mm millimetres, _in inches,
+#        _mah milliamp-hours, kv rpm/V).
+
+# =====================================================================================
+# ROVER: wheels and drive motors
+#   drive motors are gearmotors, values at the OUTPUT shaft at nominal voltage
+#   (linear brushed-DC model: torque falls linearly from stall to zero at no-load speed)
+# =====================================================================================
+[wheel.w150]
+diameter_mm = 150
+width_mm = 50
+mass_g = 160
+
+[wheel.w200]
+diameter_mm = 200
+width_mm = 60
+mass_g = 260
+
+[wheel.w250]
+diameter_mm = 250
+width_mm = 80
+mass_g = 420
+
+[wheel.w300]
+diameter_mm = 300
+width_mm = 100
+mass_g = 700
+
+[wheel.w400]
+diameter_mm = 400
+width_mm = 120
+mass_g = 1200
+
+[drive_motor.gm37_12v_50]
+voltage = 12
+stall_torque = 2.1
+no_load_rpm = 200
+stall_current = 5.5
+no_load_current = 0.2
+mass_g = 215
+
+[drive_motor.gm37_12v_131]
+voltage = 12
+stall_torque = 4.4
+no_load_rpm = 76
+stall_current = 5.5
+no_load_current = 0.2
+mass_g = 225
+
+[drive_motor.gm42_24v_60]
+voltage = 24
+stall_torque = 6.0
+no_load_rpm = 150
+stall_current = 7.0
+no_load_current = 0.3
+mass_g = 450
+
+[drive_motor.gm52_24v_100]
+voltage = 24
+stall_torque = 10.0
+no_load_rpm = 120
+stall_current = 10.0
+no_load_current = 0.4
+mass_g = 600
+
+[drive_motor.bldc_24v_51]
+voltage = 24
+stall_torque = 8.0
+no_load_rpm = 180
+stall_current = 9.0
+no_load_current = 0.25
+mass_g = 500
+
+[steer_servo.servo_35kg]
+mass_g = 75
+stall_torque = 3.4
+power_w = 1.0
