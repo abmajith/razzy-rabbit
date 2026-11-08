@@ -29,7 +29,8 @@ def load_terrain(meta: dict, folder) -> Terrain | None:
 
 
 class Sim:
-    def __init__(self, name: str, seed: int = 0, rebuild: bool = False, controller: bool = True) -> None:
+    def __init__(self, name: str, seed: int = 0, rebuild: bool = False, controller: bool = True,
+                 sensors: bool = True, record: bool = False) -> None:
         folder = scene_dir(name, seed)
         if rebuild or not (folder / "scene.xml").exists():
             from .scenes import build
@@ -52,6 +53,10 @@ class Sim:
             from .design.plant import make_plant
             self.plant = make_plant(self, self.robot)
             self.ctrls.append(self.plant)
+        self.sensors = None
+        if sensors and "sensors" in self.robot:   # grounded sensor models, sampled after each step
+            from .sensing.suite import SensorSuite
+            self.sensors = SensorSuite(self, self.robot, seed, record=record)
 
     @property
     def robot(self) -> dict:
@@ -60,9 +65,12 @@ class Sim:
     def step(self, n: int = 1) -> None:
         dt = self.m.opt.timestep
         for _ in range(n):
+            t0 = self.d.time
             for c in self.ctrls:
-                c.update(self.d.time, dt)
+                c.update(t0, dt)
             mujoco.mj_step(self.m, self.d)
+            if self.sensors is not None:
+                self.sensors.update(t0, dt)
 
     # ---- visual helpers ---------------------------------------------------------------
     def draw_wind(self, scn: mujoco.MjvScene, center, half: float = 12.0, n: int = 7, scale: float = 0.25) -> None:

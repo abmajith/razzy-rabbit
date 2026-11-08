@@ -29,11 +29,14 @@ uv run --extra sim python -m sim view wind_turbine --wind  # draws wind arrows a
 uv run --extra sim python -m sim view crop_rover --seed 7 --rebuild
 uv run --extra sim python -m sim render forest_trail --seconds 30   # headless MP4 + PNG
 uv run --extra sim python -m sim build all --seed 3
+uv run --extra sim python -m sim sensors forest_grounded  # sensor error report (designed vehicles)
 ```
 
 The viewer's Camera menu lists the onboard cameras (`*_fpv`, `*_nadir`, `*_bedcam`,
 `*_wristcam`) and an `overview`. `render` writes `sim/generated/<scene>-s<seed>/<scene>-s<seed>.mp4`
 with the chase view, plus insets of the onboard RGB and depth (what a vision policy would see).
+For designed vehicles the insets go through the camera models (noise, motion blur, rolling
+shutter, stereo holes, latency); `--ideal` shows the perfect renders instead.
 
 **GPU selection** (`sim/gpu.py`): on hybrid machines Mesa defaults to the GPU driving the
 display (here the AMD iGPU). `view` and `render` automatically prefer a discrete card
@@ -56,6 +59,7 @@ sim/
   control.py   SE(3) quadrotor control, pure-pursuit skid steer, DLS-IK harvesting
   runtime.py   Sim wrapper: load, step with controller + wind drag, draw wind arrows
   design/      vehicle sizing: configs/*.toml, drone.py, rover.py (optimiser + generator), plant.py
+  sensing/     sensor/latency/compute models, scene coupling (GNSS sky view), Allan/FFT analysis
   gpu.py       picks the discrete GPU for viewer (DRI_PRIME) and headless EGL
   custom/      developer scenes + controllers, auto-loaded (pond_survey.py example)
   cpp/         C++ batched rollout benchmark against the same scene.xml

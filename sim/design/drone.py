@@ -313,6 +313,15 @@ def to_mjcf(b, name: str, pos, design: DroneDesign, cfg: dict, chase_offset=(-3.
         coll.append(f'<geom type="capsule" fromto="{sx*.04} {sy*.035} -.01 {sx*.05} {sy*.045} -.065" size=".004" material="carbon"/>')
 
     cam = cam_pos if cam_pos is not None else np.array([0.07, 0, -0.01])
+    from ..sensing.suite import resolve
+    sensors = resolve(cfg, db)
+    inst = sensors["installation"]
+    # onboard cameras take their field of view from the chosen parts (MuJoCo fovy = vertical)
+    rgb_fovy = sensors.get("rgb_camera", {}).get("vfov_deg", 80)
+    if "rgb_camera" in sensors:
+        sensors["rgb_camera"]["camera"] = f"{name}_fpv"
+    if "depth_camera" in sensors:
+        sensors["depth_camera"]["camera"] = f"{name}_depth"
     body = [f'<body name="{name}" pos="{fmt(pos)}">',
             f'  <freejoint name="{name}_root"/>',
             f'  <inertial pos="{fmt(com)}" mass="{mass:.5f}" fullinertia="{full}"/>',
@@ -324,7 +333,9 @@ def to_mjcf(b, name: str, pos, design: DroneDesign, cfg: dict, chase_offset=(-3.
             f'<general name="{name}_m{i}" site="{name}_rotor{i}" gear="0 0 1 0 0 {s * m["k_yaw"]:.5f}" '
             f'dyntype="filter" dynprm="{tau:.4f}" gaintype="fixed" gainprm="1" ctrlrange="0 {m["t_max_n"]:.3f}"/>')
     body += [f'  <site name="{name}_imu" pos="{fmt(com)}" size=".008"/>',
-             f'  <camera name="{name}_fpv" pos="{fmt(cam)}" xyaxes="0 -1 0 .259 0 .966" fovy="80"/>',
+             f'  <camera name="{name}_fpv" pos="{fmt(cam)}" xyaxes="0 -1 0 .259 0 .966" fovy="{rgb_fovy}"/>',
+             f'  <camera name="{name}_depth" pos="{fmt(cam)}" xyaxes="0 -1 0 .259 0 .966" '
+             f'fovy="{sensors.get("depth_camera", {}).get("vfov_deg", 58)}"/>',
              f'  <camera name="{name}_nadir" pos="0 0 -.04" xyaxes="0 -1 0 1 0 0" fovy="70"/>',
              f'  <camera name="{name}_chase" mode="trackcom" pos="{fmt(chase_offset)}" xyaxes="{lookat_xyaxes(chase_offset)}"/>',
              '</body>']
@@ -343,6 +354,14 @@ def to_mjcf(b, name: str, pos, design: DroneDesign, cfg: dict, chase_offset=(-3.
                 plant=dict(kind="drone", motor=db["motor"][design.motor], prop=db["prop"][design.prop],
                            battery=db["battery"][design.battery], rho=mis["air_density"],
                            esc_eff=db["frame"]["esc_efficiency"], esc_duty=db["frame"]["esc_max_duty"],
-                           avionics_w=m["avionics_w"], t_max_ref=m["t_max_n"], rotor_drag=0.012))
+                           avionics_w=m["avionics_w"], t_max_ref=m["t_max_n"], rotor_drag=0.012),
+                sensors=sensors,
+                vibration=dict(rotor_pos=[[x - com[0], y - com[1], z - com[2]] for x, y, z, _ in sites],
+                               spin=[s for *_, s in sites], mass=mass, inertia=I.tolist(),
+                               blades=db["prop"][design.prop].get("blades", 2),
+                               imbalance_gmm=inst.get("prop_imbalance_gmm", 0.5),
+                               thrust_ripple=inst.get("thrust_ripple", 0.03),
+                               arm_hz=m["arm_freq_hz"], arm_zeta=inst.get("arm_zeta", 0.02),
+                               mount_hz=inst.get("imu_mount_hz", 1e4), mount_zeta=inst.get("imu_mount_zeta", 0.15)))
     b.meta.setdefault("robots", []).append(meta)
     return meta

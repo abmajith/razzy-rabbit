@@ -152,3 +152,9 @@ P_bus = 4·V·I / η_esc + P_avionics     drawn from the battery
 - **New vehicle type:** follow the same pattern: `evaluate` + `optimize` + `best` + `report` +
   `to_mjcf`, a plant class, and a scene that calls `best(config)` and `to_mjcf(...)`. See how
   `mars_yard` in `sim/scenes.py` does it in about 10 lines.
+
+## Sensors
+
+Sensors, their mounting, the site's magnetic field and the policy computer are chosen in
+the same mission file (`[sensors]`, `[installation]`, `[environment]`, `[compute]`). See
+[sensor_models.md](sensor_models.md).

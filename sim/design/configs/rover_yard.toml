@@ -37,3 +37,17 @@ max_tube_stress_mpa = 60   # bending stress in a rocker leg at 2 g vertical load
 
 [objective]
 maximize = "range"         # "range" | "min_mass"
+
+[sensors]
+imu = "bmi088"
+mag = "ist8310"
+gnss = "ublox_m10"
+
+[installation]
+mag_current_ut_per_a = 0.3
+gnss_antenna_height_m = 0.35
+
+[environment]
+field_ut = 47.5
+inclination_deg = 62
+declination_deg = 2.5
