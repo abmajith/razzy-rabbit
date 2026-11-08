@@ -13,7 +13,10 @@ The code is being restructured into reusable layers, one step at a time: see
 sim/
   parts/       datasheets only (TOML, one file per domain) + loader          [step 2]
   physics/     the engineering equations, pure functions, one file per domain [step 2]
-  design/      vehicle sizing: configs/*.toml (missions), drone.py, rover.py, plant.py
+  components/  robot building blocks: QuadFrame, Rotor, Battery, Board, CameraModule, Imu,
+               Chassis, RockerBogie, SteeringServo, WheelDrive, Mast ...           [step 3]
+  robots/      Robot (assembly at named mounts) + templates: quadrotor, rocker_bogie [step 3]
+  design/      vehicle sizing: configs/*.toml (missions), drone.py, rover.py; plant.py (power train)
   sensing/     sensor models, scene coupling (GNSS sky view), Allan/FFT analysis
   uncertainty.py  [uncertainty] ranges -> per-episode vehicle variants
   terrain.py   fBm heightfields (MuJoCo binary .bin) + matching ground textures

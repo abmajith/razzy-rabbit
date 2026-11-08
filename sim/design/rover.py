@@ -14,7 +14,6 @@ import itertools
 import math
 from dataclasses import dataclass, field
 
-import numpy as np
 
 from ..physics import beam, dc_motor, vehicle
 from ..physics.battery import Pack
@@ -194,134 +193,11 @@ def report(cfg, designs, top=8) -> str:
 
 # ----------------------------------------------------------------------- generator ---
 def to_mjcf(b, name: str, pos, design: RoverDesign, cfg: dict, yaw: float = 0.0) -> dict:
-    from ..builder import fmt, lookat_xyaxes
-    from ..builder import robot_materials
-
-    robot_materials(b)
-    b.material("rover_body", [0.85, 0.85, 0.82, 1], specular=0.3, shininess=0.3)
-    b.material("gold_foil", [0.85, 0.65, 0.25, 1], specular=0.8, shininess=0.8, reflectance=0.1)
-    db = components()
-    g, m = design.geo, design.m
-    r, w, s, H, zb, track = g["r"], g["w"], g["s"], g["H"], g["zb"], g["track"]
-    bd = g["body"]
-    a = g["tube"]
-    lin = g["tube_lin"] * 1.08                  # same fastener/cabling margin as the sizing
-    motor = db["drive_motor"][design.motor]
-    pack = Pack(db["battery"][design.battery])
-    ratio = pack.v_nom / motor["voltage"]
-    tau_s = motor["stall_torque"] * ratio
-    w0 = motor["no_load_rpm"] * 2 * math.pi / 60 * ratio
-    servo = g["servo"]
-
-    bl, bw, bh = bd["length_m"], bd["width_m"], bd["height_m"]
-    m_servo = servo["mass_g"] / 1000
-    mb = g["m_fixed"] - 4 * m_servo * 1.08 + lin * track     # servos live on the steering knuckles
-    Ib = mb / 12 * np.array([bw * bw + bh * bh, bl * bl + bh * bh, bl * bl + bw * bw])
-    q = f'{math.cos(yaw/2):.5f} 0 0 {math.sin(yaw/2):.5f}'
-    chase = (-3.2, -2.2, 1.6)
-    x = [f'<body name="{name}" pos="{fmt(pos)}" quat="{q}">',
-         f'  <freejoint name="{name}_root"/>',
-         f'  <inertial pos="0 0 0" mass="{mb:.4f}" diaginertia="{fmt(Ib)}"/>',
-         f'  <geom name="{name}_body" type="box" size="{bl/2} {bw/2} {bh/2}" material="rover_body"/>',
-         f'  <geom type="box" size="{bl/2+.02} {bw/2+.02} .006" pos="0 0 {bh/2+.006}" material="solar" contype="0" conaffinity="0"/>',
-         f'  <geom type="box" size="{bl/2-.03} {bw/2+.002} {bh/2-.03}" material="gold_foil" contype="0" conaffinity="0"/>',
-         # differential bar across the top + mast with navcam
-         f'  <geom type="capsule" fromto="-.05 {-track/2+w/2+a:.3f} {bh/2+.03} -.05 {track/2-w/2-a:.3f} {bh/2+.03}" size="{a/2:.3f}" material="alu" contype="0" conaffinity="0"/>',
-         f'  <geom type="cylinder" fromto="{bl/2-.06} 0 {bh/2} {bl/2-.06} 0 {bh/2+.45}" size=".015" material="alu" contype="0" conaffinity="0"/>',
-         f'  <geom type="box" size=".03 .07 .03" pos="{bl/2-.04} 0 {bh/2+.48}" material="rover_body" contype="0" conaffinity="0"/>',
-         f'  <geom type="sphere" size=".012" pos="{bl/2-.005} .035 {bh/2+.48}" material="lens" contype="0" conaffinity="0"/>',
-         f'  <geom type="sphere" size=".012" pos="{bl/2-.005} -.035 {bh/2+.48}" material="lens" contype="0" conaffinity="0"/>',
-         f'  <camera name="{name}_navcam" pos="{bl/2} 0 {bh/2+.48}" xyaxes="0 -1 0 .34 0 .94" fovy="70"/>',
-         f'  <camera name="{name}_hazcam" pos="{bl/2+.005} 0 {-bh/2+.02}" xyaxes="0 -1 0 .707 0 .707" fovy="100"/>',
-         f'  <camera name="{name}_chase" mode="trackcom" pos="{fmt(chase)}" xyaxes="{lookat_xyaxes(chase)}"/>',
-         f'  <site name="{name}_imu" size=".01"/>']
-
-    def tube(p0, p1):
-        L = float(np.linalg.norm(np.subtract(p1, p0)))
-        return (f'<geom type="capsule" fromto="{fmt(p0)} {fmt(p1)}" size="{a/2:.4f}" material="alu" '
-                f'mass="{lin*L:.4f}" contype="0" conaffinity="0"/>')
-
-    def wheel_xml(wn, ind):
-        return [f'{ind}<body name="{wn}">',
-                f'{ind}  <joint name="{wn}_j" type="hinge" axis="0 1 0" damping="0.05" armature="0.01"/>',
-                f'{ind}  <geom name="{wn}_tire" type="cylinder" size="{r:.4f} {w/2:.4f}" euler="90 0 0" material="rubber" '
-                f'mass="{g["m_wheel"] * 1.08:.4f}" friction="1.0 0.02 0.002" condim="3"/>',
-                f'{ind}  <geom type="cylinder" size="{r*0.6:.4f} {w/2+.002:.4f}" euler="90 0 0" material="alu" mass="0" contype="0" conaffinity="0"/>',
-                *[f'{ind}  <geom type="box" size=".006 {w/2+.003:.4f} {r*0.95:.4f}" euler="0 {k*30} 0" material="rubber" mass="0" contype="0" conaffinity="0"/>'
-                  for k in range(6)],                                   # grousers (visual)
-                f'{ind}</body>']
-
-    wheels, steers, wheel_xy = [], [], []
-    for sgn, side in ((1, "l"), (-1, "r")):
-        yr = sgn * (bw / 2 + a)                               # rocker plane just outside the body
-        dy = sgn * track / 2 - yr                             # wheel offset from rocker plane
-        x += [f'  <body name="{name}_rocker_{side}" pos="0 {yr:.4f} 0">',
-              f'    <joint name="{name}_rocker_{side}" type="hinge" axis="0 1 0" range="-35 35" damping="2"/>',
-              '    ' + tube([0, 0, 0], [s, 0, r - H + 0.6 * r]),
-              '    ' + tube([s, 0, r - H + 0.6 * r], [s, dy, r - H + 0.6 * r]),
-              '    ' + tube([0, 0, 0], [-s / 2, 0, zb - H]),
-              # front corner: steering + wheel
-              f'    <body name="{name}_steer_f{side}" pos="{s:.4f} {dy:.4f} {r - H:.4f}">',
-              f'      <joint name="{name}_steer_f{side}" type="hinge" axis="0 0 1" range="-{STEER_LOCK_DEG:.0f} {STEER_LOCK_DEG:.0f}" damping="0.5" armature="0.005"/>',
-              f'      <geom type="box" size=".022 .016 .02" pos="0 0 {0.6 * r + 0.02:.4f}" material="carbon" mass="{m_servo:.4f}" contype="0" conaffinity="0"/>',
-              '      ' + tube([0, 0, 0.6 * r], [0, 0, 0.02]),
-              *wheel_xml(f"{name}_w_f{side}", "      "),
-              '    </body>',
-              # bogie: middle + rear wheels
-              f'    <body name="{name}_bogie_{side}" pos="{-s/2:.4f} 0 {zb - H:.4f}">',
-              f'      <joint name="{name}_bogie_{side}" type="hinge" axis="0 1 0" range="-40 40" damping="1"/>',
-              '      ' + tube([0, 0, 0], [s / 2, 0, r - zb + 0.6 * r]),
-              '      ' + tube([0, 0, 0], [-s / 2, 0, r - zb + 0.6 * r]),
-              '      ' + tube([s / 2, 0, r - zb + 0.6 * r], [s / 2, dy, r - zb + 0.6 * r]),
-              '      ' + tube([-s / 2, 0, r - zb + 0.6 * r], [-s / 2, dy, r - zb + 0.6 * r]),
-              f'      <body name="{name}_mid_{side}" pos="{s/2:.4f} {dy:.4f} {r - zb:.4f}">',
-              *wheel_xml(f"{name}_w_m{side}", "        "),
-              '      </body>',
-              f'      <body name="{name}_steer_r{side}" pos="{-s/2:.4f} {dy:.4f} {r - zb:.4f}">',
-              f'        <joint name="{name}_steer_r{side}" type="hinge" axis="0 0 1" range="-{STEER_LOCK_DEG:.0f} {STEER_LOCK_DEG:.0f}" damping="0.5" armature="0.005"/>',
-              f'        <geom type="box" size=".022 .016 .02" pos="0 0 {0.6 * r + 0.02:.4f}" material="carbon" mass="{m_servo:.4f}" contype="0" conaffinity="0"/>',
-              *wheel_xml(f"{name}_w_r{side}", "        "),
-              '      </body>',
-              '    </body>',
-              '  </body>']
-        for pos_tag, xw in (("f", s), ("m", 0.0), ("r", -s)):
-            wn = f"{name}_w_{pos_tag}{side}"
-            wheels.append(wn)
-            wheel_xy.append([xw, sgn * track / 2])
-            b.actuators.append(
-                f'<general name="{wn}_drive" joint="{wn}_j" gaintype="fixed" gainprm="{tau_s:.4f}" '
-                f'biastype="affine" biasprm="0 0 {-tau_s / w0:.5f}" ctrlrange="-1 1" forcerange="{-tau_s:.4f} {tau_s:.4f}"/>')
-            b.sensors.append(f'<jointvel name="{wn}_qd" joint="{wn}_j"/>')
-        for pos_tag in ("f", "r"):
-            sn = f"{name}_steer_{pos_tag}{side}"
-            steers.append(sn)
-            b.actuators.append(f'<position name="{sn}_p" joint="{sn}" kp="{servo["stall_torque"] / 0.25:.2f}" '
-                               f'kv="0.3" ctrlrange="-0.7 0.7" forcerange="{-servo["stall_torque"]} {servo["stall_torque"]}"/>')
-    x.append('</body>')
-    b.world.append("\n    ".join(x))
-    # differential: left rocker angle = - right rocker angle
-    b.contacts.append(f'<exclude body1="{name}" body2="{name}_rocker_l"/>')
-    b.contacts.append(f'<exclude body1="{name}" body2="{name}_rocker_r"/>')
-    b.equalities.append(
-        f'<joint name="{name}_differential" joint1="{name}_rocker_l" joint2="{name}_rocker_r" polycoef="0 -1 0 0 0"/>')
-    b.sensors += [f'<gyro name="{name}_gyro" site="{name}_imu"/>',
-                  f'<accelerometer name="{name}_acc" site="{name}_imu"/>',
-                  f'<framepos name="{name}_pos" objtype="body" objname="{name}"/>',
-                  f'<framequat name="{name}_quat" objtype="body" objname="{name}"/>',
-                  f'<jointpos name="{name}_rocker_l_q" joint="{name}_rocker_l"/>',
-                  f'<jointpos name="{name}_bogie_l_q" joint="{name}_bogie_l"/>',
-                  f'<jointpos name="{name}_bogie_r_q" joint="{name}_bogie_r"/>']
-    meta = dict(type="rocker_bogie", body=name, wheels=wheels, wheel_xy=wheel_xy, wheel_radius=r,
-                drive=[f"{wn}_drive" for wn in wheels], steer=[f"{sn}_p" for sn in steers],
-                steer_xy={sn: ([s if "_f" in sn[-3:] else -s, (1 if sn.endswith("l") else -1) * track / 2])
-                          for sn in steers},
-                omega0=w0, tau_stall=tau_s,
-                cameras=[f"{name}_chase", f"{name}_navcam", f"{name}_hazcam"],
-                design=dict(label=design.label, metrics=m),
-                plant=dict(kind="rover", motor=motor, battery=db["battery"][design.battery], v_ratio=ratio,
-                           tau_stall=tau_s, avionics_w=bd["avionics_w"], servo_w=servo["power_w"]))
-    from ..sensing.suite import resolve
-    meta["sensors"] = resolve(cfg, db)
+    """Write the designed rover into a scene Builder (assembled from components by
+    sim/robots/templates.py); returns the robot meta."""
+    from ..robots.templates import rocker_bogie
+    robot, meta = rocker_bogie(name, cfg, design)
+    robot.write(b, pos, yaw=yaw)
     b.meta.setdefault("robots", []).append(meta)
     b.meta["uncertainty"] = dict(cfg.get("uncertainty", {}))   # drawn per episode by Sim(variant=k)
     return meta

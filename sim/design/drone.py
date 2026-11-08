@@ -12,7 +12,6 @@ import itertools
 import math
 from dataclasses import dataclass, field
 
-import numpy as np
 
 from ..physics import beam, dc_motor, propeller
 from ..physics.battery import Pack, soc_at_cutoff
@@ -198,149 +197,12 @@ def report(cfg, designs, top=8) -> str:
 
 
 # ----------------------------------------------------------------------- generator ---
-def _box_inertia(m, sx, sy, sz):
-    return m / 12 * np.diag([sy * sy + sz * sz, sx * sx + sz * sz, sx * sx + sy * sy])
-
-
 def to_mjcf(b, name: str, pos, design: DroneDesign, cfg: dict, chase_offset=(-3.0, -1.8, 1.4)) -> dict:
-    """Write the designed quadrotor into a Builder; returns robot meta (incl. plant params)."""
-    from ..builder import fmt, lookat_xyaxes
-    from ..builder import robot_materials
-
-    robot_materials(b)
-    b.material("cage", [0.15, 0.15, 0.16, 1], specular=0.3)
-    db = components()
-    g, m = design.geo, design.m
-    D, L = g["D"], g["L"]
-    parts = []   # (mass, pos, inertia_about_own_com, geom_xml or None)
-    geoms = []
-
-    def add(mass, p, I_own, xml):
-        parts.append((mass, np.asarray(p, float), I_own))
-        if xml:
-            geoms.append(xml)
-
-    plate = db["frame"]["center_plate_g"] / 1000
-    add(plate, [0, 0, 0], _box_inertia(plate, 0.11, 0.08, 0.02),
-        '<geom type="box" size=".055 .04 .01" material="carbon"/>')
-    bx, by, bz = g["battery_size"]
-    add(m["battery_kg"], [0, 0, 0.012 + bz / 2], _box_inertia(m["battery_kg"], bx, by, bz),
-        f'<geom type="box" size="{bx/2:.4f} {by/2:.4f} {bz/2:.4f}" pos="0 0 {0.012 + bz/2:.4f}" material="accent" contype="0" conaffinity="0"/>')
-    mounts = {"center": [0, 0, -0.012], "top": [-0.02, 0, 0.014 + bz], "front": [0.06, 0, -0.01],
-              "bottom": [-0.03, 0, -0.03]}
-    cam_pos = None
-    for item in g["payload"]:
-        a = db["avionics"][item]
-        sx, sy, sz = (s / 1000 for s in a["size_mm"])
-        p = np.array(mounts[a["mount"]], float)
-        if a["mount"] == "front":
-            sx, sy = sy, sx            # long side across the nose
-            p[0] = 0.055 + sx / 2
-            cam_pos = p + [sx / 2 + 0.002, 0, 0]
-        if a["mount"] == "top":
-            p[2] = 0.012 + bz + sz / 2
-        if a["mount"] in ("center", "bottom"):
-            p[2] -= sz / 2
-        mat = "lens" if a["mount"] == "front" else "carbon"
-        add(a["mass_g"] / 1000, p, _box_inertia(a["mass_g"] / 1000, sx, sy, sz),
-            f'<geom type="box" size="{sx/2:.4f} {sy/2:.4f} {sz/2:.4f}" pos="{fmt(p)}" material="{mat}" contype="0" conaffinity="0"/>')
-    rotors = [(1, -1, -1), (1, 1, 1), (-1, 1, -1), (-1, -1, 1)]   # FR, FL, RL, RR, spin sign
-    r_mot = g["stator"] / 2 + 0.003
-    sites = []
-    for i, (sx, sy, s) in enumerate(rotors):
-        u = np.array([sx, sy, 0]) / math.sqrt(2)
-        tip = u * L
-        # arm as a thin rod along u
-        Irod = g["m_arm"] / 12 * L * L * (np.eye(3) - np.outer(u, u))
-        add(g["m_arm"], tip / 2, Irod,
-            f'<geom type="capsule" fromto="0 0 0 {tip[0]:.4f} {tip[1]:.4f} 0" size="{g["tube_od"]/2:.4f}" material="carbon" contype="0" conaffinity="0"/>')
-        m_mm = g["m_motor"] + db["frame"]["motor_mount_g"] / 1000          # motor + its mount
-        add(m_mm, tip + [0, 0, 0.012], _box_inertia(m_mm, 2 * r_mot, 2 * r_mot, 0.02),
-            f'<geom type="cylinder" size="{r_mot:.4f} .011" pos="{tip[0]:.4f} {tip[1]:.4f} .012" material="alu" contype="0" conaffinity="0"/>')
-        zp = 0.03
-        add(g["m_prop"], tip + [0, 0, zp], g["m_prop"] * D * D / 24 * np.diag([0.5, 0.5, 1.0]),
-            f'<geom name="{name}_prop{i}" type="cylinder" size="{D/2:.4f} .003" pos="{tip[0]:.4f} {tip[1]:.4f} {zp}" material="prop" contype="0" conaffinity="0"/>')
-        sites.append((tip[0], tip[1], zp, s))
-        if g["cage"]:
-            rr = D / 2 + g["cage_gap"]
-            for zc in (zp - 0.02, zp + 0.02):
-                n = 10
-                for k in range(n):
-                    a0, a1 = 2 * math.pi * k / n, 2 * math.pi * (k + 1) / n
-                    p0 = [tip[0] + rr * math.cos(a0), tip[1] + rr * math.sin(a0), zc]
-                    p1 = [tip[0] + rr * math.cos(a1), tip[1] + rr * math.sin(a1), zc]
-                    geoms.append(f'<geom type="capsule" fromto="{fmt(p0)} {fmt(p1)}" size=".0018" material="cage" contype="0" conaffinity="0"/>')
-    if g["cage"]:
-        m_cage = m["cage_kg"]
-        add(m_cage, [0, 0, 0.03], m_cage * (L + D / 2) ** 2 * np.diag([0.5, 0.5, 1.0]), None)
-
-    # total mass properties (wiring spread like the frame)
-    mass = sum(p[0] for p in parts) * (1 + db["frame"]["wiring_frac"])
-    scale = mass / sum(p[0] for p in parts)
-    com = sum(p[0] * p[1] for p in parts) / sum(p[0] for p in parts)
-    I = np.zeros((3, 3))
-    for mm, p, Io in parts:
-        r = p - com
-        I += scale * (Io + mm * (r @ r * np.eye(3) - np.outer(r, r)))
-    full = f"{I[0,0]:.6g} {I[1,1]:.6g} {I[2,2]:.6g} {I[0,1]:.6g} {I[0,2]:.6g} {I[1,2]:.6g}"
-
-    # collision: cage envelope (or hull) + landing feet
-    half = L / math.sqrt(2) + D / 2 + (g["cage_gap"] if g["cage"] else 0)
-    coll = [f'<geom name="{name}_hull" type="box" size="{half:.4f} {half:.4f} .035" pos="0 0 .02" rgba="0 0 0 0" group="3"/>']
-    for sx, sy in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
-        coll.append(f'<geom type="capsule" fromto="{sx*.04} {sy*.035} -.01 {sx*.05} {sy*.045} -.065" size=".004" material="carbon"/>')
-
-    cam = cam_pos if cam_pos is not None else np.array([0.07, 0, -0.01])
-    from ..sensing.suite import resolve
-    sensors = resolve(cfg, db)
-    inst = sensors["installation"]
-    # onboard cameras take their field of view from the chosen parts (MuJoCo fovy = vertical)
-    rgb_fovy = sensors.get("rgb_camera", {}).get("vfov_deg", 80)
-    if "rgb_camera" in sensors:
-        sensors["rgb_camera"]["camera"] = f"{name}_fpv"
-    if "depth_camera" in sensors:
-        sensors["depth_camera"]["camera"] = f"{name}_depth"
-    body = [f'<body name="{name}" pos="{fmt(pos)}">',
-            f'  <freejoint name="{name}_root"/>',
-            f'  <inertial pos="{fmt(com)}" mass="{mass:.5f}" fullinertia="{full}"/>',
-            *["  " + x for x in geoms + coll]]
-    tau = max(m["tau_motor_s"], 0.005)
-    for i, (x, y, z, s) in enumerate(sites):
-        body.append(f'  <site name="{name}_rotor{i}" pos="{x:.4f} {y:.4f} {z}" size=".008"/>')
-        b.actuators.append(
-            f'<general name="{name}_m{i}" site="{name}_rotor{i}" gear="0 0 1 0 0 {s * m["k_yaw"]:.5f}" '
-            f'dyntype="filter" dynprm="{tau:.4f}" gaintype="fixed" gainprm="1" ctrlrange="0 {m["t_max_n"]:.3f}"/>')
-    body += [f'  <site name="{name}_imu" pos="{fmt(com)}" size=".008"/>',
-             f'  <camera name="{name}_fpv" pos="{fmt(cam)}" xyaxes="0 -1 0 .259 0 .966" fovy="{rgb_fovy}"/>',
-             f'  <camera name="{name}_depth" pos="{fmt(cam)}" xyaxes="0 -1 0 .259 0 .966" '
-             f'fovy="{sensors.get("depth_camera", {}).get("vfov_deg", 58)}"/>',
-             f'  <camera name="{name}_nadir" pos="0 0 -.04" xyaxes="0 -1 0 1 0 0" fovy="70"/>',
-             f'  <camera name="{name}_chase" mode="trackcom" pos="{fmt(chase_offset)}" xyaxes="{lookat_xyaxes(chase_offset)}"/>',
-             '</body>']
-    b.world.append("\n    ".join(body))
-    b.sensors += [f'<gyro name="{name}_gyro" site="{name}_imu"/>',
-                  f'<accelerometer name="{name}_acc" site="{name}_imu"/>',
-                  f'<framepos name="{name}_pos" objtype="body" objname="{name}"/>',
-                  f'<framequat name="{name}_quat" objtype="body" objname="{name}"/>']
-
-    mis = cfg["mission"]
-    span = m["span_m"]
-    meta = dict(type="quadrotor", body=name, mass=mass, actuators=[f"{name}_m{i}" for i in range(4)],
-                cameras=[f"{name}_chase", f"{name}_fpv", f"{name}_nadir"],
-                drag_CdA=(0.08 * span + 0.008) * (1.3 if g["cage"] else 1.0),
-                design=dict(label=design.label, metrics=m),
-                plant=dict(kind="drone", motor=db["motor"][design.motor], prop=db["prop"][design.prop],
-                           battery=db["battery"][design.battery], rho=mis["air_density"],
-                           esc_eff=db["frame"]["esc_efficiency"], esc_duty=db["frame"]["esc_max_duty"],
-                           avionics_w=m["avionics_w"], t_max_ref=m["t_max_n"], rotor_drag=0.012),
-                sensors=sensors,
-                vibration=dict(rotor_pos=[[x - com[0], y - com[1], z - com[2]] for x, y, z, _ in sites],
-                               spin=[s for *_, s in sites], mass=mass, inertia=I.tolist(),
-                               blades=db["prop"][design.prop].get("blades", 2),
-                               imbalance_gmm=inst.get("prop_imbalance_gmm", 0.5),
-                               thrust_ripple=inst.get("thrust_ripple", 0.03),
-                               arm_hz=m["arm_freq_hz"], arm_zeta=inst.get("arm_zeta", 0.02),
-                               mount_hz=inst.get("imu_mount_hz", 1e4), mount_zeta=inst.get("imu_mount_zeta", 0.15)))
+    """Write the designed quadrotor into a scene Builder (assembled from components by
+    sim/robots/templates.py); returns the robot meta (incl. plant and sensor specs)."""
+    from ..robots.templates import quadrotor
+    robot, meta = quadrotor(name, cfg, design, chase_offset=chase_offset)
+    robot.write(b, pos)
     b.meta.setdefault("robots", []).append(meta)
     b.meta["uncertainty"] = dict(cfg.get("uncertainty", {}))   # drawn per episode by Sim(variant=k)
     return meta

@@ -111,74 +111,93 @@ first if you want to understand the engineering.**
 
 ### 3.3 `components/`: the building blocks
 
-A **component** is a physical thing you could buy or build. Each one knows four things:
+**Done (step 3)** for geometry and mass; power, runtime specs and uncertainty move into
+components in steps 4 and 6.
+
+A **component** is a physical thing you could buy or build. When added to a robot it
+attaches at a named mount and adds what it is made of:
 
 ```python
-class Component:
-    """Base class. Subclasses: Frame, Rotor, WheelDrive, SteeringServo, Battery,
-    Imu, Gnss, Baro, Mag, StereoCamera, RgbCamera, Computer, ..."""
+class Component:                     # sim/components/base.py
+    def attach(self, robot, at: Mount) -> None:
+        """Add bodies (structure), geoms, sites, cameras, MassParts, actuators and
+        sensors; publish mounts for others; register runtime facts in robot.info."""
 
-    def mass_properties(self) -> list[MassPart]:
-        """Mass, position and inertia of what it adds (for the robot's total)."""
+    def mount(self, name) -> Mount   # a mount this component publishes (error lists the valid ones)
+    def mounts(self) -> list[str]
+    def summary(self) -> str
 
-    def mjcf(self, body: BodyRef) -> Mjcf:
-        """Geoms, sites, actuators, sensors and cameras it adds to its body."""
-
-    def electrical_load(self, state) -> float:
-        """Watts drawn now (rotor: from thrust; camera: constant; ...)."""
-
-    def runtime(self) -> RuntimeSpec:
-        """Numbers its runtime model needs (the dict the C++ core receives)."""
-
-    uncertain: dict[str, str]      # parameters that can be randomised, e.g. {"thrust_coef": "frac"}
+    # step 4: electrical_load(state) -> W, runtime spec, sensor models
+    # step 6: uncertain parameters (per component)
 ```
 
-There are two families:
+A body's mass properties come from its parts (`Body.inertial`): `"parts"` sums every
+`MassPart` with the parallel-axis theorem (the quad), `"box"` lumps them into a uniform box
+(the rover chassis), `"geoms"` lets MuJoCo use geom masses (tubes, wheels).
 
-- **Structure** creates bodies and joints: `Frame` (plate + arms), `Chassis` (box body),
-  `RockerBogie` (rockers, bogies, differential), `Mast`, and so on.
-- **Devices** attach to a body or joint created by structure:
-  - actuators: `Rotor` (motor + prop + ESC), `WheelDrive` (gearmotor + wheel on a joint),
-    `SteeringServo`
-  - energy: `Battery`
-  - sensors: `Imu`, `Gnss`, `Baro`, `Mag`, `StereoCamera`, `RgbCamera`
-  - compute: `Computer` (mass, power, inference latency)
+| family | components (file) |
+|---|---|
+| structure: create bodies | `QuadFrame` (frame.py), `Chassis` (chassis.py), `RockerBogie` (rocker_bogie.py), `SteeringServo`, `WheelDrive` (drive.py) |
+| actuators | `Rotor` (rotor.py), `WheelDrive`, `SteeringServo` (drive.py) |
+| energy, payload | `Battery`, `Payload` (energy.py) |
+| electronics | `Board`, `CameraModule` (electronics.py) |
+| sensors, views | `Imu`, `ViewCamera` (sensors.py), `Mast` (chassis.py) |
+| protection | `PropGuard` (frame.py) |
 
-**The power train becomes generic:** a robot's battery supplies the sum of every
-component's `electrical_load()`, and the resulting voltage is fed back to every actuator.
-`DronePlant` and `RoverPlant` disappear. A robot with rotors *and* wheels just works.
+Still to come (step 4): `Gnss`, `Baro`, `Mag` and the sensor models as components,
+`Computer`, and **a generic power train**: the battery supplies the sum of every
+component's `electrical_load()`, and the voltage is fed back to every actuator. Then
+`DronePlant` and `RoverPlant` disappear, and a robot with rotors *and* wheels just works.
 
 ### 3.4 `robots/`: assembly
 
-```python
-robot = Robot("scout")
-frame = robot.add(Frame(arm_tube="cf_8x6", arm_length=0.12, plate="cf_center", layout="quad_x"))
-for arm in frame.arms:                              # "FR", "FL", "RL", "RR", with spin directions
-    robot.add(Rotor(motor="m2004_1700kv", prop="p5x3_bi", spin=arm.spin), at=arm.tip)
-robot.add(Battery("lipo_6s_2200"), at=frame.mount("top"))
-robot.add(Imu("icm42688p", mount_hz=90, mount_zeta=0.15), at=frame.mount("center"))
-robot.add(Gnss("ublox_m10"), at=frame.mount("mast"))
-robot.add(StereoCamera("oakd_lite_stereo"), at=frame.mount("nose"))
-robot.add(Computer("oakd_myriadx"))
+**Done (step 3).** The two grounded vehicles are now built from components. Their compiled
+models, sizing results and trajectories are bit-identical to the old generators.
 
-robot.summary()      # mass, CoM, inertia, power budget, hover throttle, ...
-robot.mjcf()         # body tree + actuators + sensors, mass properties summed from parts
+```python
+from sim.robots import Robot
+from sim.components import QuadFrame, Battery, Board, Rotor, Imu
+
+robot = Robot("scout")
+frame = robot.add(QuadFrame("cf_8x6", arm_length=0.11, prop_d=0.127))   # creates the root body
+bat = robot.add(Battery("lipo_4s_1500"), at=frame.mount("deck"))
+robot.add(Board("fc_stack_h7"), at=frame.mount("center"))
+robot.add(Board("pi_zero2w"), at=bat.mount("top"))                       # strapped on the battery
+for arm in frame.arms:                                                  # FR, FL, RL, RR + spin
+    robot.add(Rotor("m2004_1700kv", "p5x3_bi", arm.spin, thrust_max=7.0, lag_s=0.02), at=arm.tip)
+robot.add(Imu(), at=frame.mount("cg"))                                  # at the centre of mass
+
+print(robot.summary())                # parts, bodies, mass, centre of mass
+robot.write(builder, pos=[0, 0, 0.3]) # body tree + actuators + sensors into a scene
 ```
 
-**Mounting is by named mount points only.** Every structure component publishes its
-mount points (a name, a position and an orientation on its body): a frame has `center`,
-`top`, `bottom`, `nose`, `mast` and one `tip` per arm; a rocker-bogie has `chassis.*`,
-one `wheel` joint per corner, and so on. `frame.mounts()` lists them. A device can't be
-placed at an arbitrary coordinate. If a new position is needed, the structure component
-gets a new named mount, so geometry stays in one place and stays consistent when the
-optimiser changes sizes (e.g. `arm.tip` moves when the arm gets longer).
+**Mounting is by named mount points only.** Every component that can carry others
+publishes its mounts: a name, a body, a position, and the direction an attached part
+extends in (up, down or forward), so a battery *sits on* the deck and a board *hangs under*
+the plate.
+- `QuadFrame`: `deck`, `center`, `bottom`, `nose`, `belly`, `cg`, `origin`, and `tip_FR`…
+  (also `frame.arms[i].tip`)
+- `Battery`: `top`
+- `Chassis`: `center`, `deck`, `mast`, `nose_low`, `origin`
+- `RockerBogie`: one per corner, `fl ml rl fr mr rr`
+- `SteeringServo`: its corner, for the wheel
+- `CameraModule`: `lens`
+- `Rotor`: `hub`
 
-**Templates** are plain functions that build a common robot from a few parameters. The
-optimiser explores the parameters; the same function builds the simulated robot:
+`component.mounts()` lists them. A device can't be placed at an arbitrary coordinate. If a
+new position is needed, the structure component gets a new named mount, so geometry stays
+in one place and follows size changes (`arm.tip` moves when the arm gets longer).
+
+**Templates** (`robots/templates.py`) build a common vehicle from its sizing result. The
+sizing decides the geometry (arm length from the prop size, wheel spacing and track from
+the wheel and tip-over limits). The template assembles exactly that vehicle from
+components, so sizing and simulation can't disagree:
 
 ```python
-quadrotor(motor=..., prop=..., battery=..., tube=..., payload=[...], cage=True) -> Robot
-rocker_bogie(wheel=..., gearmotor=..., battery=..., tube=..., body=...)         -> Robot
+cfg, design = drone.best("drone_forest.toml")   # or drone.evaluate(cfg, db, motor, prop, battery, tube)
+robot, meta = quadrotor("uav", cfg, design)     # meta: what the runtime / C++ core reads
+cfg, design = rover.best("rover_yard.toml")
+robot, meta = rocker_bogie("rover", cfg, design)
 # later, when needed: skid_steer(...), hexacopter(...), quadplane(...)
 ```
 
@@ -337,9 +356,9 @@ A new component brings its uncertain parameters along. No central list to edit.
 
 | step | content | proof nothing broke |
 |---|---|---|
-| 1 | this document | your review |
-| 2 | remove the demo scenes, idealised robots and their controllers; then `parts/` + `physics/` | grounded-scene tests pass; unit tests per formula; sizing results identical to today |
-| 3 | `components/` + `robots/` + templates; quad and rover rebuilt from components | generated mass, inertia and actuators match today's within rounding; existing tests pass |
+| 1 ✓ | this document | your review |
+| 2 ✓ | remove the demo scenes, idealised robots and their controllers; then `parts/` + `physics/` | grounded-scene tests pass; unit tests per formula; sizing results identical to today |
+| 3 ✓ | `components/` + `robots/` + templates; quad and rover rebuilt from components | compiled models, sizing and trajectories bit-identical; existing tests pass |
 | 4 | generic `runtime/power.py` + `runtime/sensors.py` | same battery and sensor results as `DronePlant` / `RoverPlant` / `SensorSuite` |
 | 5 | `world/` features + the two scenes as compositions | same scenes, rendered side by side; tests pass |
 | 6 | `control/` interface + chains | same trajectories as today's controllers |
