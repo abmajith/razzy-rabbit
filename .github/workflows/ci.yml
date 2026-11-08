@@ -18,11 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: System packages (CalculiX, GL runtime libs)
+      - name: System packages (GL runtime libs, C++ toolchain)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            calculix-ccx libgl1 libegl1 libglu1-mesa libxrender1 cmake g++
+          sudo apt-get install -y --no-install-recommends libgl1 libegl1 libglu1-mesa cmake g++
 
       - uses: astral-sh/setup-uv@v6
         with:
@@ -31,9 +30,8 @@ jobs:
       - name: Install Python environment (locked; compiles the razzy_core C++ extension)
         run: uv sync --extra sim --locked
 
-      - name: Tests (FEA core, scenes, sensors, uncertainty, C++ core vs Python reference)
-        # tests/gui needs a display and currently has a known failing assertion; run locally
-        run: uv run --extra sim pytest -q tests/core tests/sim
+      - name: Tests (scenes, design, sensors, uncertainty, C++ core vs Python reference)
+        run: uv run --extra sim pytest -q tests/sim
 
       - name: Build C++ batched rollout
         run: |

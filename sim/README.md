@@ -115,5 +115,4 @@ policy. Measured on a Ryzen 16C/32T, physics only (no rendering, no controller):
   training.
 - Evolutionary co-design: the robot generators in `robots.py` are parametric
   (arm length, track width, wheel radius, rotor arm), which makes them a ready search space
-  for CMA-ES / evolution strategies around RL inner loops, and a link back to the FEA side
-  of razzy-rabbit.
+  for CMA-ES / evolution strategies around RL inner loops.
