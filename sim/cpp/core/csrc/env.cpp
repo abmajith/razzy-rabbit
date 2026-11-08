@@ -1,5 +1,5 @@
-// Per-step order mirrors sim/runtime.py Sim.step():
-//   controller -> wind drag -> turbine -> plant -> mj_step -> sensors (state at t0)
+// Per-step order mirrors the Python reference (sim/runtime/sim.py):
+//   controller chain -> body drag -> power train -> rotor drag -> mj_step -> sensors (state at t0)
 #include "env.hpp"
 
 #include <limits>
@@ -23,19 +23,19 @@ void Env::apply_model(const mjModel* nom) {
     }
   }
   for (int g = 0; g < m->ngeom; ++g) m->geom_friction[3 * g] *= p.friction;
-  for (size_t i = 0; i < drone_act.size(); ++i) {
-    int a = drone_act[i];
+  for (size_t i = 0; i < p.thrust_act.size(); ++i) {
+    int a = p.thrust_act[i];
     m->actuator_gainprm[mjNGAIN * a] *= p.thrust_coef * (p.motor_gain.empty() ? 1.0 : p.motor_gain[i]);
     m->actuator_dynprm[mjNDYN * a] *= p.motor_lag;
     m->actuator_gear[6 * a + 5] *= p.yaw_coef;
   }
-  for (size_t i = 0; i < drive_act.size(); ++i) {
-    int a = drive_act[i];
+  for (size_t i = 0; i < p.drive_act.size(); ++i) {
+    int a = p.drive_act[i];
     double tq = p.drive_torque * (p.drive_gain.empty() ? 1.0 : p.drive_gain[i]);
     m->actuator_gainprm[mjNGAIN * a] *= tq;
     m->actuator_biasprm[mjNBIAS * a + 2] *= tq;
   }
-  for (int a : steer_act) {
+  for (int a : p.steer_act) {
     m->actuator_gainprm[mjNGAIN * a] *= p.steer_kp;
     m->actuator_biasprm[mjNBIAS * a + 1] *= p.steer_kp;
   }
@@ -49,7 +49,7 @@ void Env::submit(const std::vector<double>& a) {
 
 void Env::step1() {
   const double t0 = d->time, dt = m->opt.timestep;
-  if (mode != MISSION && !pending.empty()) {          // deliver actions whose compute finished
+  if (!pending.empty()) {          // deliver actions whose compute finished
     // newest *observation* wins (an older action that arrives late never overrides it)
     for (auto it = pending.begin(); it != pending.end();) {
       if (it->ready <= t0) {
@@ -58,30 +58,30 @@ void Env::step1() {
       } else ++it;
     }
   }
-  if (mode == MISSION) {
-    if (quad) quad->update(m, d, t0, dt);
-    if (rover) rover->update(m, d, t0, dt);
-  } else if (mode == SETPOINT) {
-    if (quad && held.size() >= 4) {
-      const double* p = quad->ctl.pos(d);
-      double pd[3] = {p[0], p[1], p[2]}, vd[3] = {held[0], held[1], held[2]};
-      sp_yaw += held[3] * dt;
-      quad->ctl.command(m, d, pd, vd, sp_yaw);
-    }
-    if (rover && held.size() >= 2) rover->apply(d, held[0], clampd(held[1], -rover->kmax, rover->kmax), dt);
-  } else if (held.size() == size_t(m->nu)) {
-    for (int i = 0; i < m->nu; ++i) d->ctrl[i] = held[i];
+  if (mode == CTRL) {
+    if (held.size() == size_t(m->nu))
+      for (int i = 0; i < m->nu; ++i) d->ctrl[i] = held[i];
+  } else {
+    StageCtx c{m, d, &held};
+    for (auto& st : chain) st->update(c, sig, t0, dt);
   }
-  if (drag) {
-    double f[3] = {0, 0, 0};
-    if (wind.on) wind.drag(d->qpos + quad->ctl.qa, d->qvel + quad->ctl.va, CdA, t0, f);
-    for (int k = 0; k < 3; ++k) d->xfrc_applied[6 * quad->ctl.bid + k] = f[k];
-  }
-  if (turbine_act >= 0) d->ctrl[turbine_act] = turbine_speed;
-  if (dplant) dplant->update(m, d, &wind, t0, dt);
-  if (rplant) rplant->update(m, d, t0, dt);
+  if (body_drag) body_drag->update(d, wind, t0);
+  if (power) power->update(m, d, dt);
+  if (rotor_drag) rotor_drag->update(d, wind, t0);
   mj_step(m, d);
-  if (sens) sens->update(m, d, &wind, dplant ? dplant->i : (rplant ? rplant->i : 0.0), t0, dt);
+  if (sens) sens->update(m, d, &wind, power ? power->i : 0.0, t0, dt);
+}
+
+double Env::err() const {
+  for (const auto& st : chain)
+    if (st->has_err()) return st->err();
+  return 0.0;
+}
+
+int Env::laps() const {
+  for (const auto& st : chain)
+    if (st->laps()) return st->laps();
+  return 0;
 }
 
 void Env::sync_outputs() {
@@ -184,12 +184,11 @@ void Batch::write_outputs(int i) {
   std::copy(d->qpos, d->qpos + nq, qpos.begin() + i * nq);
   std::copy(d->qvel, d->qvel + nv, qvel.begin() + i * nv);
   std::copy(d->ctrl, d->ctrl + nu, ctrl.begin() + i * nu);
-  err[i] = e.quad ? e.quad->err : (e.rover ? e.rover->err : 0.0);
-  laps[i] = e.rover ? e.rover->laps : 0;
+  err[i] = e.err();
+  laps[i] = e.laps();
   if (e.body >= 0) tilt[i] = std::acos(clampd(d->xmat[9 * e.body + 8], -1.0, 1.0)) / DEG;
   double* pl = &plant[5 * i];
-  if (e.dplant) { pl[0] = e.dplant->soc; pl[1] = e.dplant->v; pl[2] = e.dplant->i; pl[3] = e.dplant->power; pl[4] = e.dplant->energy_wh; }
-  if (e.rplant) { pl[0] = e.rplant->soc; pl[1] = e.rplant->v; pl[2] = e.rplant->i; pl[3] = e.rplant->power; pl[4] = e.rplant->energy_wh; }
+  if (e.power) { pl[0] = e.power->soc; pl[1] = e.power->v; pl[2] = e.power->i; pl[3] = e.power->power; pl[4] = e.power->energy_wh; }
   if (e.sens) {
     const Sensors& s = *e.sens;
     auto put = [&](auto& line, double* dst, int n) {

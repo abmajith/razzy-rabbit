@@ -1,5 +1,5 @@
-// Reference controllers (port of sim/control.py): geometric SE(3) quadrotor control with a
-// carrot waypoint mission, and 4-wheel-Ackermann pure pursuit for the rocker-bogie rover.
+// Controller stages (port of sim/control/: path.py, multirotor.py, ground.py). Each stage
+// reads the truth state from mjData and the previous stage's output from the Signal.
 #include <algorithm>
 #include <stdexcept>
 
@@ -31,56 +31,121 @@ static bool invert4(const double A[16], double out[16]) {
   return true;
 }
 
-// ---------------------------------------------------------------------- SE(3) quad ---
-void QuadController::init(const mjModel* m, int body, const std::vector<int>& acts) {
+void BodyRef::init(const mjModel* m, int body) {
   bid = body;
   int jnt = m->body_jntadr[bid];
   qa = m->jnt_qposadr[jnt];
   va = m->jnt_dofadr[jnt];
-  act = acts;
-  mass = m->body_subtreemass[bid];
-  for (int k = 0; k < 3; ++k) J[k] = m->body_inertia[3 * bid + k];
-  double A[16];
-  const double* com = m->body_ipos + 3 * bid;           // torques act about the centre of mass
-  for (size_t i = 0; i < act.size(); ++i) {
-    int aid = act[i];
-    int site = m->actuator_trnid[2 * aid];
-    double x = m->site_pos[3 * site] - com[0], y = m->site_pos[3 * site + 1] - com[1];
-    A[0 * 4 + i] = 1.0;
-    A[1 * 4 + i] = y;
-    A[2 * 4 + i] = -x;
-    A[3 * 4 + i] = m->actuator_gear[6 * aid + 5];
-  }
-  if (!invert4(A, Ainv)) throw std::runtime_error("quad mixer is singular");
 }
 
-void QuadController::command(const mjModel* m, mjData* d, const double p_d[3], const double v_d[3],
-                             double yaw_d) const {
-  const double* R = d->xmat + 9 * bid;
-  const double* w = d->qvel + va + 3;                  // body-frame angular velocity
-  const double* p = pos(d);
-  const double* v = vel(d);
-  double e_p[3] = {p[0] - p_d[0], p[1] - p_d[1], p[2] - p_d[2]};
+double curvature_limit(const std::vector<std::array<double, 2>>& sxy, double max_steer_deg) {
+  double sxmax = 0, symax = 0;
+  for (const auto& q : sxy) { sxmax = std::max(sxmax, std::fabs(q[0])); symax = std::max(symax, std::fabs(q[1])); }
+  double k0 = std::tan(max_steer_deg * DEG) / sxmax;
+  return k0 / (1 + k0 * symax);
+}
+
+// ------------------------------------------------------------------- FollowPath ---
+void FollowPath::init(const mjData* d, const std::vector<std::array<double, 3>>& wps) {
+  const double* p = d->qpos + b.qa;
+  std::array<double, 3> lift = {p[0], p[1], wps[0][2]};
+  P.clear();
+  P.push_back(lift);
+  for (const auto& w : wps) P.push_back(w);
+  s.assign(P.size(), 0.0);
+  for (size_t i = 1; i < P.size(); ++i)
+    s[i] = s[i - 1] + std::hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]) + 1e-9;
+  s_now = 0;
+  dirn = 1;
+  yaw = std::atan2(P[1][1] - P[0][1], P[1][0] - P[0][0]);
+  ground0 = p[2];
+  e = 0;
+}
+
+void FollowPath::target(double out[3], double tan[3]) const {
+  double sq = clampd(s_now, 0.0, s.back());
+  int i = int(std::upper_bound(s.begin(), s.end(), sq) - s.begin()) - 1;
+  i = std::min(i, int(P.size()) - 2);
+  double f = (sq - s[i]) / (s[i + 1] - s[i]);
+  double t3[3] = {P[i + 1][0] - P[i][0], P[i + 1][1] - P[i][1], P[i + 1][2] - P[i][2]};
+  double tn = std::hypot(t3[0], t3[1]) + 1e-9;
+  for (int k = 0; k < 3; ++k) {
+    out[k] = P[i][k] + f * t3[k];
+    tan[k] = t3[k] / tn;
+  }
+  if (agl && terrain) out[2] += terrain->height(out[0], out[1]);
+}
+
+void FollowPath::update(StageCtx& c, Signal& sg, double t, double dt) {
+  double p_d[3], tan[3], v_d[3] = {0, 0, 0};
+  target(p_d, tan);
+  const double* pos = c.d->qpos + b.qa;
+  if (t < t_takeoff) {
+    double z_goal = p_d[2];
+    p_d[0] = pos[0];
+    p_d[1] = pos[1];
+    p_d[2] = ground0 + (z_goal - ground0) * (t / t_takeoff);
+  } else {
+    double lag = std::sqrt((pos[0] - p_d[0]) * (pos[0] - p_d[0]) + (pos[1] - p_d[1]) * (pos[1] - p_d[1]) +
+                           (pos[2] - p_d[2]) * (pos[2] - p_d[2]));
+    e = lag;
+    double speed = cruise * clampd(1.6 - lag / 2.0, 0.0, 1.0);
+    s_now += dirn * speed * dt;
+    if (s_now >= s.back() || s_now <= s[1]) {
+      dirn *= -1;
+      s_now = clampd(s_now, s[1], s.back());
+    }
+    for (int k = 0; k < 3; ++k) v_d[k] = dirn * tan[k] * speed;
+    if (agl) v_d[2] = 0.0;
+    if (std::hypot(tan[0], tan[1]) > 1e-6) {
+      double yaw_t = std::atan2(dirn * tan[1], dirn * tan[0]);
+      double dy = floormod(yaw_t - yaw + PI, 2 * PI) - PI;
+      yaw += clampd(dy, -yaw_rate * dt, yaw_rate * dt);
+    }
+  }
+  for (int k = 0; k < 3; ++k) { sg.p[k] = p_d[k]; sg.v[k] = v_d[k]; }
+  sg.yaw = yaw;
+}
+
+// -------------------------------------------------------------- VelocityCommand ---
+void VelocityCommand::update(StageCtx& c, Signal& sg, double, double dt) {
+  const std::vector<double>& cmd = *c.command;
+  double vx = cmd.size() > 0 ? cmd[0] : 0, vy = cmd.size() > 1 ? cmd[1] : 0, vz = cmd.size() > 2 ? cmd[2] : 0;
+  double wz = cmd.size() > 3 ? cmd[3] : 0;
+  yaw += wz * dt;
+  const double* pos = c.d->qpos + b.qa;
+  for (int k = 0; k < 3; ++k) sg.p[k] = pos[k];
+  sg.v[0] = vx; sg.v[1] = vy; sg.v[2] = vz;
+  sg.yaw = yaw;
+}
+
+// ---------------------------------------------------------------- Se3Controller ---
+void Se3Controller::update(StageCtx& c, Signal& sg, double, double) {
+  const mjData* d = c.d;
+  const double* R = d->xmat + 9 * b.bid;
+  const double* w = d->qvel + b.va + 3;                 // body-frame angular velocity
+  const double* p = d->qpos + b.qa;
+  const double* v = d->qvel + b.va;
+  double e_p[3] = {p[0] - sg.p[0], p[1] - sg.p[1], p[2] - sg.p[2]};
   double n = std::sqrt(e_p[0] * e_p[0] + e_p[1] * e_p[1] + e_p[2] * e_p[2]);
   if (n > 3.0)
-    for (double& e : e_p) e *= 3.0 / n;
+    for (double& x : e_p) x *= 3.0 / n;
   double a[3];
-  for (int k = 0; k < 3; ++k) a[k] = -kp * e_p[k] - kd * (v[k] - v_d[k]);
+  for (int k = 0; k < 3; ++k) a[k] = -kp * e_p[k] - kd * (v[k] - sg.v[k]);
   a[2] += 9.81;
   a[2] = std::max(a[2], 2.0);
-  double hmax = std::tan(35.0 * DEG) * a[2];
+  double hmax = std::tan(max_tilt_deg * DEG) * a[2];
   double hn = std::sqrt(a[0] * a[0] + a[1] * a[1]);
   if (hn > hmax) { a[0] *= hmax / hn; a[1] *= hmax / hn; }
   double F[3] = {mass * a[0], mass * a[1], mass * a[2]};
   double Fn = std::sqrt(F[0] * F[0] + F[1] * F[1] + F[2] * F[2]);
   double b3[3] = {F[0] / Fn, F[1] / Fn, F[2] / Fn};
-  double b1c[3] = {std::cos(yaw_d), std::sin(yaw_d), 0.0};
+  double b1c[3] = {std::cos(sg.yaw), std::sin(sg.yaw), 0.0};
   double b2[3] = {b3[1] * b1c[2] - b3[2] * b1c[1], b3[2] * b1c[0] - b3[0] * b1c[2], b3[0] * b1c[1] - b3[1] * b1c[0]};
   double b2n = std::sqrt(b2[0] * b2[0] + b2[1] * b2[1] + b2[2] * b2[2]);
   for (double& x : b2) x /= b2n;
   double b1[3] = {b2[1] * b3[2] - b2[2] * b3[1], b2[2] * b3[0] - b2[0] * b3[2], b2[0] * b3[1] - b2[1] * b3[0]};
   double Rd[9] = {b1[0], b2[0], b3[0], b1[1], b2[1], b3[1], b1[2], b2[2], b3[2]};   // columns b1 b2 b3
-  // E = 0.5 (Rd^T R - R^T Rd)
   double E[9];
   for (int i = 0; i < 3; ++i)
     for (int j = 0; j < 3; ++j) {
@@ -98,86 +163,43 @@ void QuadController::command(const mjModel* m, mjData* d, const double p_d[3], c
   tau[0] += w[1] * Jw[2] - w[2] * Jw[1];
   tau[1] += w[2] * Jw[0] - w[0] * Jw[2];
   tau[2] += w[0] * Jw[1] - w[1] * Jw[0];
-  double T = F[0] * R[2] + F[1] * R[5] + F[2] * R[8];
-  double wrench[4] = {T, tau[0], tau[1], tau[2]};
+  sg.wrench[0] = F[0] * R[2] + F[1] * R[5] + F[2] * R[8];
+  sg.wrench[1] = tau[0]; sg.wrench[2] = tau[1]; sg.wrench[3] = tau[2];
+}
+
+// ------------------------------------------------------------------------ Mixer ---
+void Mixer::init(const mjModel* m, int body) {
+  double A[16];
+  const double* com = m->body_ipos + 3 * body;           // torques act about the centre of mass
+  if (act.size() != 4) throw std::runtime_error("mixer: exactly 4 rotors supported");
+  for (size_t i = 0; i < act.size(); ++i) {
+    int aid = act[i];
+    int site = m->actuator_trnid[2 * aid];
+    double x = m->site_pos[3 * site] - com[0], y = m->site_pos[3 * site + 1] - com[1];
+    A[0 * 4 + i] = 1.0;
+    A[1 * 4 + i] = y;
+    A[2 * 4 + i] = -x;
+    A[3 * 4 + i] = m->actuator_gear[6 * aid + 5];
+  }
+  if (!invert4(A, Ainv)) throw std::runtime_error("quad mixer is singular");
+}
+
+void Mixer::update(StageCtx& c, Signal& sg, double, double) {
   for (size_t i = 0; i < act.size(); ++i) {
     double u = 0;
-    for (int k = 0; k < 4; ++k) u += Ainv[4 * i + k] * wrench[k];
+    for (int k = 0; k < 4; ++k) u += Ainv[4 * i + k] * sg.wrench[k];
     int aid = act[i];
-    d->ctrl[aid] = clampd(u, 0.0, m->actuator_ctrlrange[2 * aid + 1]);   // live: battery sag lowers it
+    c.d->ctrl[aid] = clampd(u, 0.0, c.m->actuator_ctrlrange[2 * aid + 1]);   // live: battery sag lowers it
   }
 }
 
-// --------------------------------------------------------------------- quad mission ---
-void QuadMission::init(const mjData* d, const std::vector<std::array<double, 3>>& wps, bool agl_, double cruise_) {
-  agl = agl_;
-  cruise = cruise_;
-  const double* p = ctl.pos(d);
-  std::array<double, 3> lift = {p[0], p[1], wps[0][2]};
-  P.clear();
-  P.push_back(lift);
-  for (const auto& w : wps) P.push_back(w);
-  s.assign(P.size(), 0.0);
-  for (size_t i = 1; i < P.size(); ++i)
-    s[i] = s[i - 1] + std::hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]) + 1e-9;
-  s_now = 0;
-  dirn = 1;
-  yaw = std::atan2(P[1][1] - P[0][1], P[1][0] - P[0][0]);
-  ground0 = p[2];
-  err = 0;
-}
-
-void QuadMission::target(double out[3], double tan[3]) const {
-  double sq = clampd(s_now, 0.0, s.back());
-  int i = int(std::upper_bound(s.begin(), s.end(), sq) - s.begin()) - 1;
-  i = std::min(i, int(P.size()) - 2);
-  double f = (sq - s[i]) / (s[i + 1] - s[i]);
-  double t3[3] = {P[i + 1][0] - P[i][0], P[i + 1][1] - P[i][1], P[i + 1][2] - P[i][2]};
-  double tn = std::hypot(t3[0], t3[1]) + 1e-9;
-  for (int k = 0; k < 3; ++k) {
-    out[k] = P[i][k] + f * t3[k];
-    tan[k] = t3[k] / tn;
-  }
-  if (agl && terrain) out[2] += terrain->height(out[0], out[1]);
-}
-
-void QuadMission::update(const mjModel* m, mjData* d, double t, double dt) {
-  double p_d[3], tan[3], v_d[3] = {0, 0, 0};
-  target(p_d, tan);
-  const double* pos = ctl.pos(d);
-  if (t < t_takeoff) {
-    double z_goal = p_d[2];
-    p_d[0] = pos[0];
-    p_d[1] = pos[1];
-    p_d[2] = ground0 + (z_goal - ground0) * (t / t_takeoff);
-  } else {
-    double lag = std::sqrt((pos[0] - p_d[0]) * (pos[0] - p_d[0]) + (pos[1] - p_d[1]) * (pos[1] - p_d[1]) +
-                           (pos[2] - p_d[2]) * (pos[2] - p_d[2]));
-    err = lag;
-    double speed = cruise * clampd(1.6 - lag / 2.0, 0.0, 1.0);
-    s_now += dirn * speed * dt;
-    if (s_now >= s.back() || s_now <= s[1]) {
-      dirn *= -1;
-      s_now = clampd(s_now, s[1], s.back());
-    }
-    for (int k = 0; k < 3; ++k) v_d[k] = dirn * tan[k] * speed;
-    if (agl) v_d[2] = 0.0;
-    if (std::hypot(tan[0], tan[1]) > 1e-6) {
-      double yaw_t = std::atan2(dirn * tan[1], dirn * tan[0]);
-      double dy = floormod(yaw_t - yaw + PI, 2 * PI) - PI;
-      yaw += clampd(dy, -1.2 * dt, 1.2 * dt);
-    }
-  }
-  ctl.command(m, d, p_d, v_d, yaw);
-}
-
-// ------------------------------------------------------------------- rover ackermann ---
-void RoverAckermann::init(const mjData* d, const std::vector<std::array<double, 2>>& wp) {
+// ------------------------------------------------------------------ PurePursuit ---
+void PurePursuit::init(const mjData* d, const std::vector<std::array<double, 2>>& wp, double spacing) {
   P.clear();
   for (size_t i = 0; i < wp.size(); ++i) {
     const auto& a = wp[i];
     const auto& b = wp[(i + 1) % wp.size()];
-    int n = std::max(2, int(std::hypot(b[0] - a[0], b[1] - a[1]) / 0.2));
+    int n = std::max(2, int(std::hypot(b[0] - a[0], b[1] - a[1]) / spacing));
     for (int k = 0; k < n; ++k) P.push_back({a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n});
   }
   const double* p = d->xpos + 3 * bid;
@@ -186,50 +208,58 @@ void RoverAckermann::init(const mjData* d, const std::vector<std::array<double, 
     double dd = std::hypot(P[i][0] - p[0], P[i][1] - p[1]);
     if (dd < best) { best = dd; idx = int(i); }
   }
-  integ.assign(drive.size(), 0.0);
-  double sxmax = 0, symax = 0;
-  for (const auto& q : sxy) { sxmax = std::max(sxmax, std::fabs(q[0])); symax = std::max(symax, std::fabs(q[1])); }
-  double k0 = std::tan(38.0 * DEG) / sxmax;
-  kmax = k0 / (1 + k0 * symax);
-  laps = 0;
-  err = 0;
+  nlaps = 0;
+  e = 0;
 }
 
-void RoverAckermann::update(const mjModel*, mjData* d, double, double dt) {
-  const double* p = d->xpos + 3 * bid;
-  const double* R = d->xmat + 9 * bid;
+void PurePursuit::update(StageCtx& c, Signal& sg, double, double) {
+  const double* p = c.d->xpos + 3 * bid;
+  const double* R = c.d->xmat + 9 * bid;
   double yaw = std::atan2(R[3], R[0]);
   int n = int(P.size());
   int kbest = 0;
   double dbest = 1e300;
-  for (int k = 0; k < 60; ++k) {
+  for (int k = 0; k < window; ++k) {
     const auto& q = P[(idx + k) % n];
     double dd = std::hypot(q[0] - p[0], q[1] - p[1]);
     if (dd < dbest) { dbest = dd; kbest = k; }
   }
-  err = dbest;
-  if (idx + kbest >= n) ++laps;
+  e = dbest;
+  if (idx + kbest >= n) ++nlaps;
   idx = (idx + kbest) % n;
-  const double Ld = 1.2;
+  const double Ld = lookahead;
   int j = idx;
   for (int it = 0; it < n; ++it) {
     if (std::hypot(P[j][0] - p[0], P[j][1] - p[1]) >= Ld) break;
     j = (j + 1) % n;
   }
   double alpha = floormod(std::atan2(P[j][1] - p[1], P[j][0] - p[0]) - yaw + PI, 2 * PI) - PI;
-  double kappa = clampd(2 * std::sin(alpha) / Ld, -kmax, kmax);
-  double vv = v * (std::fabs(alpha) < 0.6 ? 1.0 : 0.4);
-  apply(d, vv, kappa, dt);
+  sg.kappa = clampd(2 * std::sin(alpha) / Ld, -kmax, kmax);
+  sg.speed = speed * (std::fabs(alpha) < slow_angle ? 1.0 : slow_factor);
 }
 
-void RoverAckermann::apply(mjData* d, double vv, double kappa, double dt) {
+void DriveCommand::update(StageCtx& c, Signal& sg, double, double) {
+  const std::vector<double>& cmd = *c.command;
+  sg.speed = cmd.size() > 0 ? cmd[0] : 0.0;
+  sg.kappa = clampd(cmd.size() > 1 ? cmd[1] : 0.0, -kmax, kmax);
+}
+
+// -------------------------------------------------------------------- Ackermann ---
+void Ackermann::update(StageCtx& c, Signal& sg, double, double) {
+  const double kappa = sg.kappa;
   for (size_t i = 0; i < steer.size(); ++i)
-    d->ctrl[steer[i]] = std::atan2(sxy[i][0] * kappa, 1 - sxy[i][1] * kappa);
+    c.d->ctrl[steer[i]] = std::atan2(sxy[i][0] * kappa, 1 - sxy[i][1] * kappa);
+  sg.wheel.resize(wxy.size());
+  for (size_t i = 0; i < wxy.size(); ++i)
+    sg.wheel[i] = sg.speed * std::hypot(1 - wxy[i][1] * kappa, wxy[i][0] * kappa) / rw;
+}
+
+void WheelSpeedPI::update(StageCtx& c, Signal& sg, double, double dt) {
   for (size_t i = 0; i < drive.size(); ++i) {
-    double w_t = vv * std::hypot(1 - wxy[i][1] * kappa, wxy[i][0] * kappa) / rw;
-    double e = (w_t - d->qvel[jdof[i]]) / w0;
-    integ[i] = clampd(integ[i] + 3.0 * e * dt, -0.6, 0.6);
-    d->ctrl[drive[i]] = clampd(w_t / w0 + 1.5 * e + integ[i], -1.0, 1.0);
+    double w_t = sg.wheel[i];
+    double e = (w_t - c.d->qvel[jdof[i]]) / w0;
+    integ[i] = clampd(integ[i] + ki * e * dt, -limit, limit);
+    c.d->ctrl[drive[i]] = clampd(w_t / w0 + kp * e + integ[i], -1.0, 1.0);
   }
 }
 

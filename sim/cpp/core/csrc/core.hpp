@@ -1,13 +1,15 @@
-// razzy_core: batched MuJoCo environments with the designed vehicle's controller, power
-// train ("plant"), sensors and latency, all in C++. Python only configures (at reset) and
-// reads/writes flat arrays.
+// razzy_core: batched MuJoCo environments built from the scene's descriptions (controller
+// chain, power loads, drag effects, sensor entries, uncertainty draw), all stepped in C++.
+// Python only configures (at reset) and reads/writes flat arrays.
 //
 // Every model here is a port of the readable Python reference:
-//   wind.cpp    <- sim/wind.py            control.cpp <- sim/control.py
-//   plant.cpp   <- sim/design/plant.py    sensors.cpp <- sim/sensing/models.py + suite.py
-//   camera.cpp  <- sim/sensing/models.py (StereoDepth, RgbCamera)
-//   env.cpp     <- sim/runtime.py (step order) + sim/uncertainty.py (apply_model)
-// Physics/controller/plant follow the Python operation order, so trajectories match the
+//   physics.cpp  <- sim/physics/aero.py (wind), sim/physics/battery.py + propeller.py,
+//                   sim/runtime/power.py (PowerSystem), sim/runtime/aero.py (drag)
+//   control.cpp  <- sim/control/ (stages)
+//   sensors.cpp  <- sim/sensing/models.py + sim/runtime/sensors.py
+//   camera.cpp   <- sim/sensing/models.py (StereoDepth, RgbCamera)
+//   env.cpp      <- sim/runtime/sim.py (step order) + sim/uncertainty.py (apply_model)
+// Physics, controllers and power follow the Python operation order, so trajectories match the
 // reference to rounding; sensor noise uses a counter-based Philox RNG (same statistics,
 // different samples than numpy).
 #pragma once
@@ -77,45 +79,104 @@ struct Wind {
   double ground(double x, double y) const { return terrain && terrain->valid() ? terrain->height(x, y) : 0.0; }
 };
 
-// --------------------------------------------------------------------- controllers ---
-struct QuadController {
-  int bid = 0, qa = 0, va = 0;
-  std::vector<int> act;
-  double mass = 0, J[3] = {0, 0, 0}, Ainv[16];
-  double kp = 5.0, kd = 4.0, kR = 140.0, kW = 22.0;
-  void init(const mjModel* nominal, int body, const std::vector<int>& acts);
-  // fmax: live per-actuator max thrust (from the env model, lowered by battery sag)
-  void command(const mjModel* m, mjData* d, const double p_d[3], const double v_d[3], double yaw_d) const;
-  const double* pos(const mjData* d) const { return d->qpos + qa; }
-  const double* vel(const mjData* d) const { return d->qvel + va; }
+// ------------------------------------------------------------- controller stages ---
+// Port of sim/control/: a chain of stages run every physics step. Stages pass a small
+// signal record down the chain (each stage reads what the previous one wrote).
+struct Signal {
+  double p[3] = {0, 0, 0}, v[3] = {0, 0, 0}, yaw = 0;   // pose setpoint
+  double wrench[4] = {0, 0, 0, 0};                      // thrust + torques
+  double speed = 0, kappa = 0;                          // ground: speed + curvature
+  std::vector<double> wheel;                            // ground: wheel-speed targets
 };
 
-struct QuadMission {
-  QuadController ctl;
+struct StageCtx {          // what a stage may touch: model (live limits), data, command input
+  const mjModel* m;
+  mjData* d;
+  const std::vector<double>* command;
+};
+
+struct Stage {
+  virtual ~Stage() = default;
+  virtual void update(StageCtx& c, Signal& s, double t, double dt) = 0;
+  virtual bool has_err() const { return false; }
+  virtual double err() const { return 0.0; }
+  virtual int laps() const { return 0; }
+};
+
+struct BodyRef {           // free-joint addresses of the vehicle's main body
+  int bid = 0, qa = 0, va = 0;
+  void init(const mjModel* m, int body);
+};
+
+struct FollowPath : Stage {
+  BodyRef b;
   std::vector<std::array<double, 3>> P;
   std::vector<double> s;
-  double s_now = 0, yaw = 0, t_takeoff = 2.5, ground0 = 0, cruise = 3.0, err = 0;
+  double s_now = 0, yaw = 0, t_takeoff = 2.5, yaw_rate = 1.2, ground0 = 0, cruise = 3.0, e = 0;
   int dirn = 1;
   bool agl = true;
   const Terrain* terrain = nullptr;
-  void init(const mjData* d, const std::vector<std::array<double, 3>>& wps, bool agl_, double cruise_);
+  void init(const mjData* d, const std::vector<std::array<double, 3>>& wps);
   void target(double out_p[3], double out_tan[3]) const;
-  void update(const mjModel* m, mjData* d, double t, double dt);
+  void update(StageCtx& c, Signal& sg, double t, double dt) override;
+  bool has_err() const override { return true; }
+  double err() const override { return e; }
 };
 
-struct RoverAckermann {
-  int bid = 0;
-  std::vector<int> drive, jdof, steer;
-  std::vector<std::array<double, 2>> wxy, sxy, P;
-  double rw = 0.1, w0 = 1, v = 0.5, kmax = 1, err = 0;
-  int idx = 0, laps = 0;
+struct VelocityCommand : Stage {          // policy input: command = vx vy vz yaw_rate
+  BodyRef b;
+  double yaw = 0;
+  void update(StageCtx& c, Signal& sg, double t, double dt) override;
+};
+
+struct Se3Controller : Stage {
+  BodyRef b;
+  double mass = 0, J[3] = {0, 0, 0}, kp = 5, kd = 4, kR = 140, kW = 22, max_tilt_deg = 35;
+  void update(StageCtx& c, Signal& sg, double t, double dt) override;
+};
+
+struct Mixer : Stage {
+  std::vector<int> act;
+  double Ainv[16];
+  void init(const mjModel* nominal, int body);
+  void update(StageCtx& c, Signal& sg, double t, double dt) override;
+};
+
+struct PurePursuit : Stage {
+  int bid = 0, idx = 0, nlaps = 0, window = 60;
+  std::vector<std::array<double, 2>> P;
+  double speed = 0.5, lookahead = 1.2, slow_angle = 0.6, slow_factor = 0.4, kmax = 1, e = 0;
+  void init(const mjData* d, const std::vector<std::array<double, 2>>& wps, double spacing);
+  void update(StageCtx& c, Signal& sg, double t, double dt) override;
+  bool has_err() const override { return true; }
+  double err() const override { return e; }
+  int laps() const override { return nlaps; }
+};
+
+struct DriveCommand : Stage {             // policy input: command = speed curvature
+  double kmax = 1;
+  void update(StageCtx& c, Signal& sg, double t, double dt) override;
+};
+
+struct Ackermann : Stage {
+  std::vector<int> steer;
+  std::vector<std::array<double, 2>> sxy, wxy;
+  double rw = 0.1;
+  void update(StageCtx& c, Signal& sg, double t, double dt) override;
+};
+
+struct WheelSpeedPI : Stage {
+  std::vector<int> drive, jdof;
   std::vector<double> integ;
-  void init(const mjData* d, const std::vector<std::array<double, 2>>& waypoints);
-  void update(const mjModel* m, mjData* d, double t, double dt);
-  void apply(mjData* d, double v_cmd, double kappa, double dt);   // shared low level
+  double w0 = 1, kp = 1.5, ki = 3.0, limit = 0.6;
+  void update(StageCtx& c, Signal& sg, double t, double dt) override;
 };
 
-// --------------------------------------------------------------------------- plants ---
+// steering curvature limit of corner-steered vehicles (pure pursuit / drive command)
+double curvature_limit(const std::vector<std::array<double, 2>>& sxy, double max_steer_deg);
+
+// ----------------------------------------------------------------- power train ---
+// Port of sim/runtime/power.py: one battery, a list of loads, voltage sag fed back.
 struct Pack {
   std::vector<double> soc_tab, ocv_tab;
   int cells = 1;
@@ -128,24 +189,39 @@ struct RotorParams { double kv, r_ohm, i0, D, ct, cp, rho; };
 // operating point of one rotor at thrust T: rev/s, electrical power
 void rotor_point(const RotorParams& p, double T, double& n, double& Pe);
 
-struct DronePlant {
-  int bid = 0, dof = 0;
+struct Load {              // a dynamic load: rotors (power from thrust) or gearmotors (from torque)
+  enum Kind { ROTOR, GEARMOTOR } kind = ROTOR;
   std::vector<int> act;
-  Pack pack;
+  // rotor
   RotorParams rp{};
-  double esc_eff = 0.95, avionics_w = 0, t_max_ref = 1, rotor_drag = 0, v_ref = 1;
-  double soc = 1, v = 0, i = 0, power = 0, energy_wh = 0;
-  void update(mjModel* m, mjData* d, const Wind* wind, double t, double dt);
+  double esc_eff = 0.95, t_max_ref = 1, v_ref = 1;
+  // gearmotor
+  std::vector<double> tau_s;
+  double i0 = 0, i_s = 1, v_nom = 1;
+  double power(const mjData* d, double v_bus) const;
+  void apply_voltage(mjModel* m, double v, double soc) const;
 };
 
-struct RoverPlant {
-  std::vector<int> act;
+struct PowerSystem {
   Pack pack;
-  std::vector<double> tau_s;
-  double i0 = 0, i_s = 1, avionics_w = 0, servo_w = 0;
-  int n_servo = 0;
+  std::vector<Load> loads;
+  std::vector<double> constant;   // constant groups (W), in order of first use
   double soc = 1, v = 0, i = 0, power = 0, energy_wh = 0;
-  void update(mjModel* m, mjData* d, double t, double dt);
+  void update(mjModel* m, mjData* d, double dt);
+};
+
+// ------------------------------------------------------------------ aero effects ---
+struct BodyDrag {          // quadratic drag of the body in the wind field (assigned)
+  BodyRef b;
+  double CdA = 0.04;
+  void update(mjData* d, const Wind& wind, double t) const;
+};
+
+struct RotorDrag {         // blade-flapping drag ~ total thrust x airspeed in the rotor plane (added)
+  BodyRef b;
+  std::vector<int> act;
+  double k = 0;
+  void update(mjData* d, const Wind& wind, double t) const;
 };
 
 // -------------------------------------------------------------------------- sensors ---

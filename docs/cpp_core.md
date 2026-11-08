@@ -18,8 +18,8 @@ falls back to the reference automatically, and the CLI says so.
  Python (once per reset)                       C++ (every step, all envs in parallel)
  ───────────────────────                       ───────────────────────────────────────
  meta.json + [uncertainty] draw  ─ config ─►  Env: own physics-model copy + mjData
- (sim/core.py CoreBatch._config)   dict        controller → wind drag → turbine → plant
-                                               → mj_step → sensors (+ latency lines)
+ (sim/core.py CoreBatch._config)   dict        controller chain → body drag → power train
+                                               → rotor drag → mj_step → sensors (+ latency)
  numpy views  ◄──────── arrays ─────────────  time, qpos, qvel, ctrl, err, plant,
                                                imu, baro, mag, gnss (latest delivered)
 ```
@@ -116,9 +116,32 @@ The extension links the `libmujoco` shipped in the `mujoco` wheel. The project p
 different MuJoCo version, with the command to rebuild. `-DRAZZY_NATIVE=ON` adds
 `-march=native`. It's off by default so wheels stay portable.
 
+## What the C++ core builds from the scene (generic since step 7)
+
+The C++ core has no drone or rover code paths any more. It builds each environment from
+the same descriptions the Python reference uses:
+
+| description (scene meta) | C++ (`csrc/`) |
+|---|---|
+| controller chain `meta["control"]` | stages in `control.cpp`: `FollowPath`, `VelocityCommand`, `Se3Controller`, `Mixer`, `PurePursuit`, `DriveCommand`, `Ackermann`, `WheelSpeedPI`, with any parameters, passing a `Signal` down the chain |
+| power loads `robot["power"]` | `PowerSystem` in `physics.cpp`: a battery + a list of `rotor` / `gearmotor` loads + constant groups. A robot with rotors *and* wheels works |
+| `drag_CdA`, `rotor_drag` | `BodyDrag`, `RotorDrag` effects |
+| sensor entries `robot["sensors"]` | `Sensors` in `sensors.cpp` (one per type) |
+| `[uncertainty]` draw | `Env::apply_model`, with the actuator lists it applies to |
+
+- **`"setpoint"` mode** replaces the chain's top stage with a command stage (`VelocityCommand`
+  for a path-following drone, `DriveCommand` for a rover); `act()` feeds it.
+- **`"ctrl"` mode** runs no chain and passes raw actuator commands.
+- **A new robot or chain made of existing component and stage types needs no C++.**
+- **A new *type*** (a stage, a load, a sensor) needs the Python reference class, its C++
+  port in the matching file, a parser entry in `bindings.cpp`, a line in `CoreBatch._config`,
+  and an equivalence test.
+
 ## Not in C++ yet
 
-- **Controllers** that exist only in Python run their scene on the Python engine.
+- **Control stages** that exist only in Python, or `chain.using("sensors")`: that scene runs
+  on the Python engine, and the CLI says why.
+- **Several sensors of one type** on a robot (Python has the same limit).
 - **Viewer perturbations:** mouse forces in the viewer act on the mirror, not on the C++
   physics.
 - **Rendering:** stays on MuJoCo's renderer (GPU). Batched rendering for vision policies

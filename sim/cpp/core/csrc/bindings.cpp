@@ -159,13 +159,11 @@ void parse_sensors(Env& e, const nb::dict& c, uint64_t seed, const RayScene* ray
 void reset_env(Batch& B, int i, const nb::dict& c) {
   if (i < 0 || i >= int(B.envs.size())) throw std::out_of_range("env index");
   Env& e = *B.envs[i];
-  e.quad.reset(); e.rover.reset(); e.dplant.reset(); e.rplant.reset(); e.sens.reset();
-  e.mode = int(num(c, "mode", MISSION));
+  e.chain.clear(); e.body_drag.reset(); e.rotor_drag.reset(); e.power.reset(); e.sens.reset();
+  e.sig = Signal{};
+  e.mode = int(num(c, "mode", CHAIN));
   e.body = int(num(c, "body", -1));
   uint64_t seed = uint64_t(nb::cast<int64_t>(c["seed"]));
-  e.drone_act = has(c, "quad") ? ivec(sub(c, "quad"), "act") : std::vector<int>{};
-  e.drive_act = has(c, "rover") ? ivec(sub(c, "rover"), "drive") : std::vector<int>{};
-  e.steer_act = has(c, "rover") ? ivec(sub(c, "rover"), "steer") : std::vector<int>{};
   e.params = ModelParams{};
   if (has(c, "model")) {
     nb::dict p = sub(c, "model");
@@ -179,6 +177,7 @@ void reset_env(Batch& B, int i, const nb::dict& c) {
     mp.thrust_coef = num(p, "thrust_coef", 1); mp.motor_lag = num(p, "motor_lag", 1); mp.yaw_coef = num(p, "yaw_coef", 1);
     mp.drive_torque = num(p, "drive_torque", 1); mp.steer_kp = num(p, "steer_kp", 1);
     mp.motor_gain = vec(p, "motor_gain"); mp.drive_gain = vec(p, "drive_gain");
+    mp.thrust_act = ivec(p, "thrust_act"); mp.drive_act = ivec(p, "drive_act"); mp.steer_act = ivec(p, "steer_act");
   }
   e.apply_model(B.nominal);
   mj_resetData(e.m, e.d);
@@ -205,55 +204,116 @@ void reset_env(Batch& B, int i, const nb::dict& c) {
       W.tR = req(w, "turbine_R"); W.tCt = req(w, "turbine_Ct"); W.tk = req(w, "turbine_k");
     }
   }
-  // controllers: built against the NOMINAL model ----------------------------------------
-  e.drag = false;
-  if (has(c, "quad")) {
-    nb::dict q = sub(c, "quad");
-    e.quad = std::make_unique<QuadMission>();
-    e.quad->ctl.init(B.nominal, int(req(q, "body")), e.drone_act);
-    e.quad->terrain = B.terrain.valid() ? &B.terrain : nullptr;
-    auto w = vec(q, "waypoints");
-    std::vector<std::array<double, 3>> wps;
-    for (size_t k = 0; k + 2 < w.size(); k += 3) wps.push_back({w[k], w[k + 1], w[k + 2]});
-    bool agl = num(q, "agl", 1) != 0;
-    e.quad->agl = agl;
-    e.quad->init(e.d, wps, agl, num(q, "cruise", 3.0));
-    e.CdA = num(q, "CdA", 0.04);
-    e.drag = true;
-    e.sp_yaw = e.quad->yaw;
+  // controller chain: built against the NOMINAL model -------------------------------------
+  if (has(c, "chain")) {
+    for (nb::handle h : nb::cast<nb::list>(c["chain"])) {
+      nb::dict q = nb::cast<nb::dict>(h);
+      std::string type = nb::cast<std::string>(q["type"]);
+      if (type == "follow_path") {
+        auto st = std::make_unique<FollowPath>();
+        st->b.init(B.nominal, int(req(q, "body")));
+        st->terrain = B.terrain.valid() ? &B.terrain : nullptr;
+        st->agl = num(q, "agl", 1) != 0;
+        st->cruise = req(q, "cruise"); st->t_takeoff = req(q, "takeoff_s"); st->yaw_rate = req(q, "yaw_rate");
+        auto w = vec(q, "waypoints");
+        std::vector<std::array<double, 3>> wps;
+        for (size_t k = 0; k + 2 < w.size(); k += 3) wps.push_back({w[k], w[k + 1], w[k + 2]});
+        st->init(e.d, wps);
+        e.chain.push_back(std::move(st));
+      } else if (type == "velocity_command") {
+        auto st = std::make_unique<VelocityCommand>();
+        st->b.init(B.nominal, int(req(q, "body")));
+        const double* R = e.d->xmat + 9 * st->b.bid;
+        st->yaw = std::atan2(R[3], R[0]);
+        e.chain.push_back(std::move(st));
+      } else if (type == "se3") {
+        auto st = std::make_unique<Se3Controller>();
+        st->b.init(B.nominal, int(req(q, "body")));
+        st->mass = B.nominal->body_subtreemass[st->b.bid];
+        for (int k = 0; k < 3; ++k) st->J[k] = B.nominal->body_inertia[3 * st->b.bid + k];
+        st->kp = req(q, "kp"); st->kd = req(q, "kd"); st->kR = req(q, "kR"); st->kW = req(q, "kW");
+        st->max_tilt_deg = req(q, "max_tilt_deg");
+        e.chain.push_back(std::move(st));
+      } else if (type == "mixer") {
+        auto st = std::make_unique<Mixer>();
+        st->act = ivec(q, "act");
+        st->init(B.nominal, int(req(q, "body")));
+        e.chain.push_back(std::move(st));
+      } else if (type == "pure_pursuit" || type == "drive_command") {
+        auto sv = vec(q, "sxy");
+        std::vector<std::array<double, 2>> sxy;
+        for (size_t k = 0; k + 1 < sv.size(); k += 2) sxy.push_back({sv[k], sv[k + 1]});
+        double kmax = curvature_limit(sxy, req(q, "max_steer_deg"));
+        if (type == "drive_command") {
+          auto st = std::make_unique<DriveCommand>();
+          st->kmax = kmax;
+          e.chain.push_back(std::move(st));
+          continue;
+        }
+        auto st = std::make_unique<PurePursuit>();
+        st->bid = int(req(q, "body"));
+        st->kmax = kmax;
+        st->speed = req(q, "speed"); st->lookahead = req(q, "lookahead"); st->window = int(req(q, "window"));
+        st->slow_angle = req(q, "slow_angle"); st->slow_factor = req(q, "slow_factor");
+        auto wp = vec(q, "waypoints");
+        std::vector<std::array<double, 2>> wps;
+        for (size_t k = 0; k + 1 < wp.size(); k += 2) wps.push_back({wp[k], wp[k + 1]});
+        st->init(e.d, wps, req(q, "spacing"));
+        e.chain.push_back(std::move(st));
+      } else if (type == "ackermann") {
+        auto st = std::make_unique<Ackermann>();
+        st->steer = ivec(q, "steer");
+        auto sv = vec(q, "sxy"), wv = vec(q, "wxy");
+        for (size_t k = 0; k + 1 < sv.size(); k += 2) st->sxy.push_back({sv[k], sv[k + 1]});
+        for (size_t k = 0; k + 1 < wv.size(); k += 2) st->wxy.push_back({wv[k], wv[k + 1]});
+        st->rw = req(q, "rw");
+        e.chain.push_back(std::move(st));
+      } else if (type == "wheel_speed_pi") {
+        auto st = std::make_unique<WheelSpeedPI>();
+        st->drive = ivec(q, "drive"); st->jdof = ivec(q, "jdof");
+        st->w0 = req(q, "w0"); st->kp = req(q, "kp"); st->ki = req(q, "ki"); st->limit = req(q, "limit");
+        st->integ.assign(st->drive.size(), 0.0);
+        e.chain.push_back(std::move(st));
+      } else {
+        throw std::runtime_error("razzy_core: unknown control stage '" + type + "'");
+      }
+    }
   }
-  if (has(c, "rover")) {
-    nb::dict q = sub(c, "rover");
-    auto& r = e.rover = std::make_unique<RoverAckermann>();
-    r->bid = int(req(q, "body"));
-    r->drive = e.drive_act; r->steer = e.steer_act; r->jdof = ivec(q, "jdof");
-    auto wxy = vec(q, "wxy"), sxy = vec(q, "sxy"), wp = vec(q, "waypoints");
-    for (size_t k = 0; k + 1 < wxy.size(); k += 2) r->wxy.push_back({wxy[k], wxy[k + 1]});
-    for (size_t k = 0; k + 1 < sxy.size(); k += 2) r->sxy.push_back({sxy[k], sxy[k + 1]});
-    std::vector<std::array<double, 2>> wps;
-    for (size_t k = 0; k + 1 < wp.size(); k += 2) wps.push_back({wp[k], wp[k + 1]});
-    r->rw = req(q, "rw"); r->w0 = req(q, "w0"); r->v = req(q, "v");
-    r->init(e.d, wps);
+  // aero effects + power train: get the drawn vehicle ------------------------------------
+  if (has(c, "body_drag")) {
+    nb::dict q = sub(c, "body_drag");
+    e.body_drag = std::make_unique<BodyDrag>();
+    e.body_drag->b.init(e.m, int(req(q, "body")));
+    e.body_drag->CdA = req(q, "CdA");
   }
-  e.turbine_act = has(c, "turbine") ? int(req(sub(c, "turbine"), "act")) : -1;
-  e.turbine_speed = has(c, "turbine") ? req(sub(c, "turbine"), "speed") : 0.0;
-  // plants: get the drawn vehicle ---------------------------------------------------------
-  if (has(c, "dplant")) {
-    nb::dict p = sub(c, "dplant");
-    auto& P = e.dplant = std::make_unique<DronePlant>();
-    P->bid = int(req(p, "bid")); P->dof = int(req(p, "dof")); P->act = ivec(p, "act");
-    P->pack = parse_pack(sub(p, "pack"));
-    P->rp = {req(p, "kv"), req(p, "r_ohm"), req(p, "i0"), req(p, "D"), req(p, "ct"), req(p, "cp"), req(p, "rho")};
-    P->esc_eff = req(p, "esc_eff"); P->avionics_w = req(p, "avionics_w"); P->t_max_ref = req(p, "t_max_ref");
-    P->rotor_drag = req(p, "rotor_drag");
-    P->v_ref = P->pack.ocv(0.5); P->soc = 1; P->v = P->pack.ocv(1.0);
+  if (has(c, "rotor_drag")) {
+    nb::dict q = sub(c, "rotor_drag");
+    e.rotor_drag = std::make_unique<RotorDrag>();
+    e.rotor_drag->b.init(e.m, int(req(q, "body")));
+    e.rotor_drag->act = ivec(q, "act");
+    e.rotor_drag->k = req(q, "k");
   }
-  if (has(c, "rplant")) {
-    nb::dict p = sub(c, "rplant");
-    auto& P = e.rplant = std::make_unique<RoverPlant>();
-    P->act = ivec(p, "act"); P->pack = parse_pack(sub(p, "pack")); P->tau_s = vec(p, "tau_s");
-    P->i0 = req(p, "i0"); P->i_s = req(p, "i_s"); P->avionics_w = req(p, "avionics_w");
-    P->servo_w = req(p, "servo_w"); P->n_servo = int(req(p, "n_servo"));
+  if (has(c, "power")) {
+    nb::dict q = sub(c, "power");
+    auto& P = e.power = std::make_unique<PowerSystem>();
+    P->pack = parse_pack(sub(q, "pack"));
+    for (nb::handle h : nb::cast<nb::list>(q["loads"])) {
+      nb::dict l = nb::cast<nb::dict>(h);
+      Load ld;
+      ld.act = ivec(l, "act");
+      if (nb::cast<std::string>(l["type"]) == "rotor") {
+        ld.kind = Load::ROTOR;
+        ld.rp = {req(l, "kv"), req(l, "r_ohm"), req(l, "i0"), req(l, "D"), req(l, "ct"), req(l, "cp"), req(l, "rho")};
+        ld.esc_eff = req(l, "esc_eff"); ld.t_max_ref = req(l, "t_max_ref");
+        ld.v_ref = P->pack.ocv(0.5);
+      } else {
+        ld.kind = Load::GEARMOTOR;
+        ld.tau_s = vec(l, "tau_s"); ld.i0 = req(l, "i0"); ld.i_s = req(l, "i_s");
+        ld.v_nom = P->pack.v_nom;
+      }
+      P->loads.push_back(ld);
+    }
+    P->constant = vec(q, "constant");
     P->soc = 1; P->v = P->pack.ocv(1.0);
   }
   if (has(c, "sensors")) parse_sensors(e, sub(c, "sensors"), seed, B.rays.get(), &B.terrain);
@@ -268,7 +328,7 @@ void reset_env(Batch& B, int i, const nb::dict& c) {
   }
   e.pending.clear();
   e.held_capture = -1e300;
-  e.held.assign(e.mode == CTRL ? e.m->nu : (e.quad ? 4 : 2), 0.0);
+  e.held.assign(e.mode == CTRL ? e.m->nu : 4, 0.0);
   e.imu_delivered.clear();
   B.write_outputs(i);
 }

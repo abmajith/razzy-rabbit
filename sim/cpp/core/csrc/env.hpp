@@ -16,40 +16,38 @@ struct ModelParams {   // uncertainty draw applied to the env's model copy (sim/
   double mass_frac = 1, inertia_frac[3] = {1, 1, 1}, com_offset[3] = {0, 0, 0}, friction = 1;
   double thrust_coef = 1, motor_lag = 1, yaw_coef = 1, drive_torque = 1, steer_kp = 1;
   std::vector<double> motor_gain, drive_gain;
+  std::vector<int> thrust_act, drive_act, steer_act;     // which actuators the factors apply to
 };
 
-enum Mode { MISSION = 0, SETPOINT = 1, CTRL = 2 };
+enum Mode { CHAIN = 0, CTRL = 2 };   // CHAIN: the controller chain (incl. command stages); CTRL: raw actuators
 
 struct Env {
   mjModel* m = nullptr;
   mjData* d = nullptr;
-  int mode = MISSION, body = -1;
+  int mode = CHAIN, body = -1;
   ModelParams params;
-  std::vector<int> drone_act, drive_act, steer_act;
-  std::unique_ptr<QuadMission> quad;
-  std::unique_ptr<RoverAckermann> rover;
-  int turbine_act = -1;
-  double turbine_speed = 0;
+  std::vector<std::unique_ptr<Stage>> chain;
+  Signal sig;
   Wind wind;
-  double CdA = 0.04;
-  bool drag = false;
-  std::unique_ptr<DronePlant> dplant;
-  std::unique_ptr<RoverPlant> rplant;
+  std::unique_ptr<BodyDrag> body_drag;
+  std::unique_ptr<RotorDrag> rotor_drag;
+  std::unique_ptr<PowerSystem> power;
   std::unique_ptr<Sensors> sens;
-  // actions (setpoint / ctrl modes), optionally delayed by policy compute time
+  // actions (command stages / raw ctrl), optionally delayed by policy compute time
   ComputeLatency compute;
   Rng r_compute;
   struct Pending { double ready, capture; std::vector<double> a; };
   std::deque<Pending> pending;
   std::vector<double> held;
   double held_capture = -1e300;
-  double sp_yaw = 0;
   std::vector<std::array<double, 7>> imu_delivered;   // drained by Python (EKF-style consumers)
   ~Env();
   void apply_model(const mjModel* nominal);
   void step1();
   void submit(const std::vector<double>& a);
   void sync_outputs();
+  double err() const;
+  int laps() const;
 };
 
 class Pool {

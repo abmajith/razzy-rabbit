@@ -26,32 +26,23 @@ from .sensing.models import DelayLine, latency_sampler
 from .runtime.sensors import FOLIAGE_WORDS, by_type
 from .physics.aero import WindField
 
-MODES = {"mission": 0, "setpoint": 1, "ctrl": 2}
-# controller chains the C++ core implements (with these exact parameters); step 7 makes it generic
-CORE_CHAINS = {("follow_path", "se3", "mixer"): "quad", ("pure_pursuit", "ackermann", "wheel_speed_pi"): "rover"}
+MODES = {"mission": 0, "setpoint": 0, "ctrl": 2}   # setpoint = chain with a command stage on top
+# controller stages the C++ core implements (any chain of these, any parameters)
+CORE_STAGES = {"follow_path", "velocity_command", "se3", "mixer", "pure_pursuit", "drive_command", "ackermann",
+               "wheel_speed_pi"}
 
 
-def core_chain(meta: dict) -> tuple[str, dict]:
-    """("quad" | "rover", {stage name: params}) if the C++ core can run this scene's controller
-    chain, else raise Unsupported (the CLI then falls back to the Python reference)."""
-    from .control import STAGES
+def core_supported(meta: dict) -> None:
+    """Raise Unsupported if the C++ core can't run this scene (the CLI then falls back to
+    the Python reference)."""
     spec = meta.get("control")
     if spec is None:
         raise Unsupported("scene has no controller chain")
     if spec.get("source", "truth") != "truth":
         raise Unsupported(f"state source '{spec['source']}' is not in the C++ core")
-    names = tuple(st["type"] for st in spec["stages"])
-    if names not in CORE_CHAINS:
-        raise Unsupported(f"controller chain {' >> '.join(names)} has no C++ version yet")
-    params = {}
-    for st in spec["stages"]:
-        p = {k: v for k, v in st.items() if k != "type"}
-        fixed = {k: v for k, v in STAGES[st["type"]].defaults.items() if k not in ("waypoints", "agl", "cruise", "speed")}
-        changed = {k for k in fixed if k in p and p[k] != fixed[k]}
-        if changed:
-            raise Unsupported(f"stage {st['type']} uses non-default {sorted(changed)}; the C++ core has the defaults only")
-        params[st["type"]] = p
-    return CORE_CHAINS[names], params
+    missing = [st["type"] for st in spec["stages"] if st["type"] not in CORE_STAGES]
+    if missing:
+        raise Unsupported(f"control stage(s) {missing} have no C++ version yet")
 
 
 class Unsupported(Exception):
@@ -121,10 +112,11 @@ def _pack(b: dict) -> dict:
 class CoreBatch:
     """N environments of one scene stepped in parallel by the C++ core.
 
-    mode "mission"  : built-in reference controller flies/drives the mission
-         "setpoint" : act() rows are drone [vx, vy, vz, yaw_rate] or rover [speed, curvature],
-                      tracked by the C++ low-level controller (the recommended RL interface)
-         "ctrl"     : act() rows are raw actuator commands
+    mode "mission"  : the scene's controller chain (meta["control"]) flies/drives the mission
+         "setpoint" : the chain's top stage is replaced by a command stage; act() rows are
+                      drone [vx, vy, vz, yaw_rate] or rover [speed, curvature], tracked by the
+                      rest of the chain (the recommended RL interface)
+         "ctrl"     : no chain; act() rows are raw actuator commands
     Actions pass through the policy-compute latency model when the vehicle has one.
     """
 
@@ -139,7 +131,7 @@ class CoreBatch:
         self.name, self.folder, self.seed, self.mode = name, folder, seed, mode
         self.use_sensors, self.record = sensors, record
         self.meta0 = json.loads((folder / "meta.json").read_text())
-        core_chain(self.meta0)                             # raises Unsupported if C++ can't run it
+        core_supported(self.meta0)                         # raises Unsupported if C++ can't run it
         self.terrain = load_terrain(self.meta0, folder)
         phys = physics_model(folder)
         self.m = mujoco.MjModel.from_binary_path(phys)        # ids / names (same as the full model)
@@ -174,25 +166,33 @@ class CoreBatch:
                         "motor_gain": list(np.atleast_1d(g("motor_gain", []))), "motor_lag": g("motor_lag", 1.0),
                         "yaw_coef": g("yaw_coef", 1.0), "drive_torque": g("drive_torque", 1.0),
                         "drive_gain": list(np.atleast_1d(g("drive_gain", []))), "steer_kp": g("steer_kp", 1.0)}
-        kind, stages = core_chain(meta)
-        if kind == "quad":
-            fp = stages["follow_path"]
-            cfg["quad"] = {"body": bid, "act": [m.actuator(a).id for a in r["actuators"]],
-                           "waypoints": np.asarray(fp["waypoints"], float).ravel().tolist(), "agl": int(fp["agl"]),
-                           "cruise": fp["cruise"], "CdA": r.get("drag_CdA", 0.04)}
-        if kind == "rover":
-            pp = stages["pure_pursuit"]
-            cfg["rover"] = {"body": bid, "drive": [m.actuator(a).id for a in r["drive"]],
-                            "steer": [m.actuator(f"{s}_p").id for s in r["steer_xy"]],
-                            "jdof": [int(m.jnt_dofadr[m.joint(f"{w}_j").id]) for w in r["wheels"]],
-                            "wxy": np.asarray(r["wheel_xy"], float).ravel().tolist(),
-                            "sxy": np.asarray(list(r["steer_xy"].values()), float).ravel().tolist(),
-                            "rw": r["wheel_radius"], "w0": r["omega0"], "v": pp["speed"],
-                            "waypoints": np.asarray(pp["waypoints"], float).ravel().tolist()}
-        if "quad" not in cfg and "rover" not in cfg:
-            raise Unsupported(f"robot type '{r.get('type')}' has no C++ controller yet")
-        if "rotor_speed" in meta:
-            cfg["turbine"] = {"act": m.actuator("rotor_drive").id, "speed": meta["rotor_speed"]}
+        cfg["model"].update(thrust_act=[m.actuator(a).id for a in r.get("actuators", [])],
+                            drive_act=[m.actuator(a).id for a in r.get("drive", [])],
+                            steer_act=[m.actuator(a).id for a in r.get("steer", [])])
+        if self.mode != "ctrl":
+            cfg["chain"] = [self._stage(st, r, bid) for st in self._chain_spec(meta)["stages"]]
+        if "drag_CdA" in r:
+            cfg["body_drag"] = {"body": bid, "CdA": r["drag_CdA"]}
+        if "rotor_drag" in r:
+            rd = r["rotor_drag"]
+            cfg["rotor_drag"] = {"body": m.body(rd["body"]).id, "act": [m.actuator(a).id for a in rd["actuators"]],
+                                 "k": rd["rotor_drag"]}
+        pw = r.get("power")
+        if pw:
+            loads = []
+            for ld in pw["loads"]:
+                act = [m.actuator(a).id for a in ld.get("actuators", [])]
+                if ld["type"] == "rotor":
+                    loads.append({"type": "rotor", "act": act, "kv": ld["motor"]["kv"], "r_ohm": ld["motor"]["r_ohm"],
+                                  "i0": ld["motor"]["i0"], "D": ld["prop"]["diameter_in"] * 0.0254, "ct": ld["prop"]["ct"],
+                                  "cp": ld["prop"]["cp"], "rho": ld["rho"], "esc_eff": ld["esc_eff"],
+                                  "t_max_ref": ld["t_max_ref"]})
+                elif ld["type"] == "gearmotor":
+                    loads.append({"type": "gearmotor", "act": act, "tau_s": list(map(float, ld["tau_s"])),
+                                  "i0": ld["motor"]["no_load_current"],
+                                  "i_s": ld["motor"]["stall_current"] * ld["v_ratio"]})
+            cfg["power"] = {"pack": _pack(pw["battery"]), "loads": loads,
+                            "constant": [float(w) for w in _constant_groups(pw).values()]}
         if "wind" in meta:
             w = WindField(meta["wind"], self.terrain, self.seed)          # same draws as the reference
             wc = {"U": w.U, "heading": float(w.heading), "gust": w.gust, "z_ref": w.z_ref, "z0": w.z0,
@@ -202,28 +202,6 @@ class CoreBatch:
                 wc.update(turbine_hub=list(w.turbine["hub"]), turbine_R=w.turbine["R"], turbine_Ct=w.turbine["Ct"],
                           turbine_k=w.turbine["k"])
             cfg["wind"] = wc
-        # power train: the C++ core still has one drone and one rover plant (generic in step 7);
-        # map the component loads onto them, keeping the reference's order of additions
-        pw = r.get("power")
-        if pw:
-            const = [w for w in _constant_groups(pw).values()]
-            rot = [ld for ld in pw["loads"] if ld["type"] == "rotor"]
-            gear = [ld for ld in pw["loads"] if ld["type"] == "gearmotor"]
-            if rot:
-                ld = rot[0]
-                cfg["dplant"] = {"bid": bid, "dof": free_dof, "act": [m.actuator(a).id for a in ld["actuators"]],
-                                 "pack": _pack(pw["battery"]), "kv": ld["motor"]["kv"], "r_ohm": ld["motor"]["r_ohm"],
-                                 "i0": ld["motor"]["i0"], "D": ld["prop"]["diameter_in"] * 0.0254, "ct": ld["prop"]["ct"],
-                                 "cp": ld["prop"]["cp"], "rho": ld["rho"], "esc_eff": ld["esc_eff"],
-                                 "avionics_w": float(sum(const)), "t_max_ref": ld["t_max_ref"],
-                                 "rotor_drag": r.get("rotor_drag", {}).get("rotor_drag", 0.0)}
-            if gear:
-                ld = gear[0]
-                cfg["rplant"] = {"act": [m.actuator(a).id for a in ld["actuators"]], "pack": _pack(pw["battery"]),
-                                 "tau_s": list(map(float, ld["tau_s"])), "i0": ld["motor"]["no_load_current"],
-                                 "i_s": ld["motor"]["stall_current"] * ld["v_ratio"],
-                                 "avionics_w": const[0] if const else 0.0,
-                                 "servo_w": float(sum(const[1:])), "n_servo": 1 if len(const) > 1 else 0}
         sp = by_type(r)
         if self.use_sensors and "imu" in sp:
             imu = sp["imu"]
@@ -258,6 +236,52 @@ class CoreBatch:
         if self.mode != "mission" and "compute" in r:
             cfg["compute"] = {"rate_hz": r["compute"]["rate_hz"], **_lat(r["compute"]["inference_ms"])}
         return cfg
+
+    def _chain_spec(self, meta: dict) -> dict:
+        """The scene's chain; in "setpoint" mode its top (path) stage is replaced by a command
+        stage fed by act(): drone [vx, vy, vz, yaw_rate], rover [speed, curvature]."""
+        spec = meta["control"]
+        if self.mode != "setpoint":
+            return spec
+        stages = [dict(st) for st in spec["stages"]]
+        top = stages[0]["type"]
+        if top == "follow_path":
+            stages[0] = {"type": "velocity_command"}
+        elif top == "pure_pursuit":
+            stages[0] = {"type": "drive_command", "max_steer_deg": stages[0].get("max_steer_deg", 38.0)}
+        elif top not in ("velocity_command", "drive_command"):
+            raise Unsupported(f"setpoint mode: don't know which command stage replaces '{top}'")
+        return {**spec, "stages": stages}
+
+    def _stage(self, st: dict, r: dict, bid: int) -> dict:
+        """One chain stage for C++: parameters (defaults filled in) + names resolved to ids."""
+        from .control import STAGES
+        m = self.m
+        kind = st["type"]
+        p = {**STAGES[kind].defaults, **{k: v for k, v in st.items() if k != "type"}}
+        out = {"type": kind, "body": bid}
+        sxy = np.asarray(list(r.get("steer_xy", {}).values()), float).ravel().tolist()
+        if kind == "follow_path":
+            out.update(waypoints=np.asarray(p["waypoints"], float).ravel().tolist(), agl=int(p["agl"]),
+                       cruise=p["cruise"], takeoff_s=p["takeoff_s"], yaw_rate=p["yaw_rate"])
+        elif kind == "se3":
+            out.update(kp=p["kp"], kd=p["kd"], kR=p["kR"], kW=p["kW"], max_tilt_deg=p["max_tilt_deg"])
+        elif kind == "mixer":
+            out["act"] = [m.actuator(a).id for a in r["actuators"]]
+        elif kind == "pure_pursuit":
+            out.update(waypoints=np.asarray(p["waypoints"], float).ravel().tolist(), speed=p["speed"],
+                       lookahead=p["lookahead"], spacing=p["spacing"], window=p["window"],
+                       max_steer_deg=p["max_steer_deg"], slow_angle=p["slow_angle"], slow_factor=p["slow_factor"], sxy=sxy)
+        elif kind == "drive_command":
+            out.update(max_steer_deg=p["max_steer_deg"], sxy=sxy)
+        elif kind == "ackermann":
+            out.update(steer=[m.actuator(f"{s}_p").id for s in r["steer_xy"]], sxy=sxy,
+                       wxy=np.asarray(r["wheel_xy"], float).ravel().tolist(), rw=r["wheel_radius"])
+        elif kind == "wheel_speed_pi":
+            out.update(drive=[m.actuator(a).id for a in r["drive"]],
+                       jdof=[int(m.jnt_dofadr[m.joint(f"{w}_j").id]) for w in r["wheels"]], w0=r["omega0"],
+                       kp=p["kp"], ki=p["ki"], limit=p["limit"])
+        return out
 
     # ------------------------------------------------------------------- control ---
     def reset(self, envs=None, variants=None) -> None:

@@ -355,11 +355,19 @@ the template is the same function the scene uses, sizing and simulation can't di
   It loads a scene and steps it:
   `controllers → actuators → power system → physics step → sensors`. The step loop iterates
   over components, with no per-vehicle code.
-- **`core/` (C++).** Mirrors each *component type* as a C++ class. The reset config becomes
-  a list `[{"type": "Rotor", ...}, {"type": "Imu", ...}]`, and the env iterates over it.
-  - **A new robot needs no C++.**
-  - **A new component type** needs a Python reference class, a C++ class and an
-    equivalence test, each in its own file.
+- **`core/` (C++). Done (step 7).** It mirrors each *type* as a C++ class:
+  - control stages (`control.cpp`)
+  - power loads (`PowerSystem`) and drag effects (`physics.cpp`)
+  - sensors (`sensors.cpp`)
+
+  The reset config is the scene's descriptions with names resolved to ids: the stage list,
+  the load list, the sensor entries. The env iterates over them, with no drone or rover
+  code paths.
+  - **A new robot or chain made of existing types needs no C++.** Custom gains run in C++
+    and match Python (tested).
+  - **A new type** needs a Python reference class, its C++ port, a parser entry and an
+    equivalence test.
+  - **Speed:** unchanged (about 23k steps/s for one forest drone, about 340k on 16 threads).
 
 ### 3.10 `analysis/`
 
@@ -431,7 +439,7 @@ A new component brings its uncertain parameters along. No central list to edit.
 | 4 ✓ | generic `runtime/power.py` + `runtime/sensors.py` | same battery and sensor results as `DronePlant` / `RoverPlant` / `SensorSuite` |
 | 5 ✓ | `world/` features + the two scenes as compositions | same scenes, rendered side by side; tests pass |
 | 6 ✓ | `control/` interface + chains | same trajectories as today's controllers |
-| 7 | C++ core made component-generic | equivalence tests against the Python reference (as now) |
+| 7 ✓ | C++ core made component-generic | equivalence tests against the Python reference (as now) |
 | 8 | tutorial: "a new robot and scene in 30 lines" | you write one |
 
 Old modules keep working until their replacement is merged, then they're deleted in the

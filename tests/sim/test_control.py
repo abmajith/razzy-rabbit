@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("mujoco")
 
-from sim.control import (Ackermann, DriveCommand, FollowPath, Mixer, PurePursuit, Se3Controller,  # noqa: E402
+from sim.control import (Ackermann, DriveCommand, FollowPath, Mixer, Se3Controller,  # noqa: E402
                          VelocityCommand, WheelSpeedPI, from_spec)
 from sim.runtime import Sim  # noqa: E402
 
@@ -53,16 +53,47 @@ def test_drive_command_drives_the_rover():
     assert np.linalg.norm(sim.d.xpos[bid][:2] - x0) > 1.5
 
 
-def test_core_takes_only_chains_it_implements():
+def test_cpp_core_runs_custom_chains_like_python():
+    """Since step 7 the C++ core builds its controller from the chain spec: changed gains
+    run in C++ and match the Python reference."""
     pytest.importorskip("razzy_core")
-    from sim.core import Unsupported, core_chain
-    meta = Sim("mars_yard", 0, sensors=False).meta0
-    assert core_chain(meta)[0] == "rover"
-    changed = copy.deepcopy(meta)
-    changed["control"]["stages"][2]["kp"] = 2.0                            # WheelSpeedPI gain
-    with pytest.raises(Unsupported, match="non-default"):
-        core_chain(changed)
-    other = copy.deepcopy(meta)
-    other["control"] = (PurePursuit([[0, 0], [5, 0], [5, 5]]) >> Ackermann()).spec()
+    from sim.core import CoreBatch
+    py = Sim("forest_grounded", 0, sensors=False)
+    cb = CoreBatch("forest_grounded", 1, 0, sensors=False)
+    for meta in (py.meta0, cb.meta0):
+        meta["control"]["stages"][0]["cruise"] = 4.0                      # FollowPath
+        meta["control"]["stages"][1].update(kp=6.5, kR=120.0)             # Se3Controller
+    py.reset(None)
+    cb.reset([0], [None])
+    for _ in range(3):
+        py.step(500)
+        cb.step(500)
+        assert np.abs(py.d.qpos - cb.qpos[0]).max() < 1e-9
+
+
+def test_cpp_setpoint_mode_matches_python_command_stage():
+    pytest.importorskip("razzy_core")
+    from sim.core import CoreBatch
+    py = Sim("mars_yard", 0, controller=False, sensors=False)
+    cmd = DriveCommand()
+    py.ctrls.insert(0, (cmd >> Ackermann() >> WheelSpeedPI()).attach(py))
+    cmd.command = np.array([0.5, 0.15])
+    cb = CoreBatch("mars_yard", 1, 0, mode="setpoint", sensors=False)
+    cb.act(np.array([[0.5, 0.15]]))
+    for _ in range(4):
+        py.step(500)
+        cb.step(500)
+    assert np.abs(py.d.qpos - cb.qpos[0]).max() < 1e-6
+
+
+def test_core_falls_back_only_for_what_it_lacks():
+    pytest.importorskip("razzy_core")
+    from sim.core import Unsupported, core_supported
+    meta = copy.deepcopy(Sim("mars_yard", 0, sensors=False).meta0)
+    core_supported(meta)                                                    # any gains are fine now
+    meta["control"]["source"] = "sensors"
+    with pytest.raises(Unsupported, match="source"):
+        core_supported(meta)
+    meta["control"] = {"source": "truth", "stages": [{"type": "my_planner"}]}
     with pytest.raises(Unsupported, match="no C\\+\\+ version"):
-        core_chain(other)
+        core_supported(meta)
