@@ -181,3 +181,15 @@ def _json_default(o):
     if isinstance(o, (np.floating, np.integer)):
         return o.item()
     raise TypeError(type(o))
+
+
+def robot_materials(b: "Builder") -> None:
+    """Shared materials for generated vehicles (carbon, aluminium, props, lenses...)."""
+    b.material("carbon", [0.10, 0.10, 0.11, 1], specular=0.5, shininess=0.6)
+    b.material("accent", [0.95, 0.45, 0.08, 1], specular=0.3, shininess=0.4)
+    b.material("alu", [0.72, 0.74, 0.77, 1], specular=0.6, shininess=0.7, reflectance=0.05)
+    b.material("rubber", [0.06, 0.06, 0.06, 1], specular=0.05)
+    b.material("prop", [0.15, 0.15, 0.15, 0.35])
+    b.material("solar", [0.08, 0.12, 0.30, 1], specular=0.9, shininess=0.9, reflectance=0.15)
+    b.material("white_paint", [0.92, 0.92, 0.90, 1], specular=0.3, shininess=0.4)
+    b.material("lens", [0.02, 0.02, 0.05, 1], specular=1.0, shininess=1.0)

@@ -2,7 +2,7 @@
 functions can be fitted against real logs.
 
 Every model takes a *spec* dict whose fields are datasheet quantities (see the `imu.*`,
-`gnss.*`, ... sections of sim/design/configs/components.toml) and a seeded
+`gnss.*`, ... sections of sim/parts/sensors.toml) and a seeded
 numpy Generator, so a (scene, seed) pair reproduces every noise sample bit-for-bit.
 
 Noise conventions (match how datasheets and Allan-variance plots state them):
@@ -13,8 +13,6 @@ Noise conventions (match how datasheets and Allan-variance plots state them):
 from __future__ import annotations
 
 import math
-from collections import deque
-
 import numpy as np
 
 G0 = 9.80665
@@ -22,65 +20,9 @@ DEG = math.pi / 180
 
 
 # ============================================================================ helpers ===
-class GaussMarkov:
-    """First-order Gauss-Markov process: stationary std `sigma`, correlation time `tau`."""
-
-    def __init__(self, sigma, tau: float, rng: np.random.Generator, shape=()) -> None:
-        self.sigma, self.tau, self.rng = np.asarray(sigma, float), float(tau), rng
-        self.x = self.sigma * rng.standard_normal(shape)
-
-    def step(self, dt: float) -> np.ndarray:
-        a = math.exp(-dt / self.tau)
-        self.x = a * self.x + self.sigma * math.sqrt(1 - a * a) * self.rng.standard_normal(self.x.shape)
-        return self.x
-
-
-class DelayLine:
-    """Measurements become visible `latency` after capture (latency may jitter per sample).
-    push(t_capture, value, latency); latest(t) -> (t_capture, value) of the newest delivered
-    sample, or None. drain(t) -> all samples delivered since the previous drain."""
-
-    def __init__(self, maxlen: int = 4096) -> None:
-        self.q: deque = deque(maxlen=maxlen)
-        self._latest = None
-
-    def push(self, t_capture: float, value, latency: float) -> None:
-        self.q.append((t_capture + latency, t_capture, value))
-
-    def drain(self, t: float) -> list:
-        out = []
-        # samples can overtake each other when latency jitters: deliver every ready one
-        ready = [s for s in self.q if s[0] <= t]
-        if ready:
-            self.q = deque((s for s in self.q if s[0] > t), maxlen=self.q.maxlen)
-            ready.sort(key=lambda s: s[1])
-            out = [(tc, v) for _, tc, v in ready]
-            if self._latest is None or out[-1][0] >= self._latest[0]:
-                self._latest = out[-1]
-        return out
-
-    def latest(self, t: float):
-        self.drain(t)
-        return self._latest
-
-
-def latency_sampler(spec_ms, rng: np.random.Generator):
-    """spec_ms: number or [min, max] in ms -> callable returning a latency in seconds."""
-    if isinstance(spec_ms, (list, tuple)):
-        lo, hi = float(spec_ms[0]) / 1000, float(spec_ms[1]) / 1000
-        return lambda: float(rng.uniform(lo, hi))
-    v = float(spec_ms) / 1000
-    return lambda: v
-
-
-def transmissibility(f, fn: float, zeta: float):
-    """|X/Y| of a base-excited spring-mass-damper (vibration isolation / resonance)."""
-    r = np.asarray(f, float) / fn
-    return np.sqrt((1 + (2 * zeta * r) ** 2) / ((1 - r * r) ** 2 + (2 * zeta * r) ** 2))
-
-
-def lowpass_gain(f, fc: float, order: int = 2):
-    return 1.0 / np.sqrt(1 + (np.asarray(f, float) / fc) ** (2 * order))
+# building blocks live in sim/physics (re-exported here for the sensor models below)
+from ..physics.noise import DelayLine, GaussMarkov, latency_sampler  # noqa: E402,F401
+from ..physics.vibration import lowpass_gain, transmissibility  # noqa: E402,F401
 
 
 def _small_rotation(rng, sigma_rad: float) -> np.ndarray:

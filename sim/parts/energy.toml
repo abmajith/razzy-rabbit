@@ -1,0 +1,154 @@
+# Energy: battery packs and cell chemistry
+#
+# Datasheet values only: no code reads a specific part. Values are representative of
+# commonly available parts (rounded from typical datasheets), NOT vendor-certified: copy
+# your real parts' datasheet numbers in here. Add a part by adding a [section.name] block.
+#
+# Units: SI unless the key says otherwise (_g grams, _mm millimetres, _in inches,
+#        _mah milliamp-hours, kv rpm/V).
+
+# =====================================================================================
+# Batteries (drone and rover)
+#   chemistry  "lipo" | "liion" | "lifepo4"   (sets OCV curve + nominal cell voltage)
+#   c_max      max continuous discharge in C   r_cell  internal resistance per cell [ohm]
+#   series/parallel describe the pack; capacity is the whole pack
+# =====================================================================================
+[battery.lipo_3s_1000]
+chemistry = "lipo"
+cells = 3
+capacity_mah = 1000
+mass_g = 85
+c_max = 75
+r_cell = 0.010
+size_mm = [70, 34, 22]
+
+[battery.lipo_4s_1500]
+chemistry = "lipo"
+cells = 4
+capacity_mah = 1500
+mass_g = 185
+c_max = 100
+r_cell = 0.006
+size_mm = [75, 37, 37]
+
+[battery.lipo_4s_2200]
+chemistry = "lipo"
+cells = 4
+capacity_mah = 2200
+mass_g = 250
+c_max = 60
+r_cell = 0.007
+size_mm = [105, 34, 34]
+
+[battery.lipo_4s_3000]
+chemistry = "lipo"
+cells = 4
+capacity_mah = 3000
+mass_g = 330
+c_max = 50
+r_cell = 0.007
+size_mm = [135, 43, 30]
+
+[battery.lipo_6s_1300]
+chemistry = "lipo"
+cells = 6
+capacity_mah = 1300
+mass_g = 215
+c_max = 100
+r_cell = 0.007
+size_mm = [75, 36, 50]
+
+[battery.lipo_6s_2200]
+chemistry = "lipo"
+cells = 6
+capacity_mah = 2200
+mass_g = 340
+c_max = 60
+r_cell = 0.007
+size_mm = [107, 35, 50]
+
+[battery.liion_4s1p_4200]
+chemistry = "liion"
+cells = 4
+capacity_mah = 4200
+mass_g = 290
+c_max = 10
+r_cell = 0.016
+size_mm = [85, 44, 23]
+
+[battery.liion_4s2p_8400]
+chemistry = "liion"
+cells = 4
+capacity_mah = 8400
+mass_g = 570
+c_max = 10
+r_cell = 0.009
+size_mm = [85, 88, 23]
+
+[battery.liion_6s1p_4200]
+chemistry = "liion"
+cells = 6
+capacity_mah = 4200
+mass_g = 430
+c_max = 10
+r_cell = 0.016
+size_mm = [128, 44, 23]
+
+# rover packs
+[battery.liion_3s4p_14000]
+chemistry = "liion"
+cells = 3
+capacity_mah = 14000
+mass_g = 900
+c_max = 3
+r_cell = 0.006
+size_mm = [140, 75, 70]
+
+[battery.liion_6s2p_7000]
+chemistry = "liion"
+cells = 6
+capacity_mah = 7000
+mass_g = 900
+c_max = 3
+r_cell = 0.012
+size_mm = [140, 75, 70]
+
+[battery.liion_6s4p_14000]
+chemistry = "liion"
+cells = 6
+capacity_mah = 14000
+mass_g = 1800
+c_max = 3
+r_cell = 0.006
+size_mm = [140, 150, 70]
+
+[battery.lifepo4_4s_20000]
+chemistry = "lifepo4"
+cells = 4
+capacity_mah = 20000
+mass_g = 2300
+c_max = 2
+r_cell = 0.004
+size_mm = [180, 80, 150]
+
+# =====================================================================================
+# Cell chemistry: open-circuit voltage per cell vs state of charge (used by
+# sim/physics/battery.py). nominal = rated cell voltage, cutoff = end of discharge.
+# =====================================================================================
+[chemistry.lipo]
+nominal = 3.7
+cutoff = 3.5
+soc = [0.0, 0.05, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
+ocv = [3.30, 3.55, 3.65, 3.74, 3.80, 3.88, 4.05, 4.20]
+
+[chemistry.liion]
+nominal = 3.6
+cutoff = 3.0
+soc = [0.0, 0.05, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
+ocv = [3.00, 3.25, 3.40, 3.55, 3.65, 3.80, 4.00, 4.20]
+
+[chemistry.lifepo4]
+nominal = 3.2
+cutoff = 2.8
+soc = [0.0, 0.05, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
+ocv = [2.80, 3.00, 3.15, 3.25, 3.28, 3.30, 3.35, 3.60]

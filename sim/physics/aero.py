@@ -1,4 +1,4 @@
-"""Analytic wind field  v(x, y, z, t)  built from superposed potential-flow elements.
+"""Air drag and the analytic wind field  v(x, y, z, t)  built from superposed potential-flow elements.
 
     horizontal flow = log-law profile(AGL) * [ uniform stream
                                               + doublets (flow around tower/trunk cylinders)
@@ -14,6 +14,12 @@ from __future__ import annotations
 import numpy as np
 
 RHO_AIR = 1.225
+
+
+def drag_force(CdA: float, v_rel, rho: float = RHO_AIR) -> np.ndarray:
+    """Quadratic drag F = 1/2 rho CdA |v| v [N] for air velocity v_rel relative to the body."""
+    v_rel = np.asarray(v_rel, float)
+    return 0.5 * rho * CdA * np.linalg.norm(v_rel) * v_rel
 
 
 class WindField:
@@ -92,5 +98,4 @@ class WindField:
         return V
 
     def drag_force(self, pos, vel, CdA: float, t: float) -> np.ndarray:
-        vrel = self.velocity(pos, t)[0] - np.asarray(vel)
-        return 0.5 * RHO_AIR * CdA * np.linalg.norm(vrel) * vrel
+        return drag_force(CdA, self.velocity(pos, t)[0] - np.asarray(vel))

@@ -13,44 +13,32 @@ sudo apt install cmake g++ libgl1 libegl1
 uv sync --extra sim
 ```
 
-## Simulation environments (`sim/`)
+## Scenes
 
-Procedural, reproducible MuJoCo environments for field robotics (UAVs, agricultural rovers,
-greenhouse harvesting), each with a reference controller already running. Scenes are
-generated as plain MJCF, so the same files load from Python and from C/C++.
+Procedural, reproducible MuJoCo scenes (same seed, byte-identical files) whose vehicles are
+**sized from real parts**:
 
-| scene | robot |
+| scene | vehicle |
 |---|---|
-| `orchard_uav` | quadrotor flying the alleys of an apple orchard on rolling hills |
-| `crop_rover` | high-clearance weeding rover following lettuce beds with furrows and weeds |
-| `forest_trail` | quadrotor following a hiking trail through steep mixed forest |
-| `greenhouse` | pipe-rail trolley with an arm picking ripe tomatoes into a crate |
-| `wind_turbine` | quadrotor inspecting a spinning turbine in a potential-flow wind field |
-| `forest_grounded` | forest trail flown by a **quad sized from real parts** (`drone_forest.toml`) |
-| `mars_yard` | rocky yard driven by a **sized six-wheel rocker-bogie rover** (`rover_yard.toml`) |
-| `pond_survey` | example developer scene (`sim/custom/`): quadrotor orbiting a pond |
+| `forest_grounded` | quadrotor sized from `drone_forest.toml`, flying a trail through steep mixed forest |
+| `mars_yard` | six-wheel rocker-bogie rover sized from `rover_yard.toml`, driving a rocky yard with craters |
 
-### Run
 ```bash
-uv sync --extra sim            # adds mujoco + imageio on top of the base environment
+uv run --extra sim python -m sim list                              # scenes
+uv run --extra sim python -m sim view forest_grounded              # interactive viewer
+uv run --extra sim python -m sim view forest_grounded --wind       # + wind-field arrows
+uv run --extra sim python -m sim view mars_yard --seed 7 --rebuild # another random terrain
+uv run --extra sim python -m sim render mars_yard --seconds 30     # headless MP4 + PNG
 ```
 
-### Run
-```bash
-uv run --extra sim python -m sim list                          # show all scenes
-uv run --extra sim python -m sim view greenhouse               # interactive 3D viewer
-uv run --extra sim python -m sim view wind_turbine --wind      # + wind-field arrows
-uv run --extra sim python -m sim view crop_rover --seed 7 --rebuild   # another random variant
-uv run --extra sim python -m sim render forest_trail --seconds 30     # headless MP4 + PNG
-uv run --extra sim python -m sim build all --seed 3            # just generate assets
-```
-
-- Output goes to `sim/generated/<scene>-s<seed>/` (git-ignored). The same seed always gives
-  identical files.
-- In the viewer, the **Camera** menu has onboard cameras (`*_fpv`, `*_nadir`, `*_bedcam`,
-  `*_wristcam`) and `overview`. Geom group 3 shows the invisible colliders.
+- Output goes to `sim/generated/<scene>-s<seed>/` (git-ignored).
+- In the viewer, the **Camera** menu has the onboard cameras and `overview`. Geom group 3
+  shows the invisible colliders.
 - The discrete GPU is selected automatically (here the Intel Arc rather than the AMD iGPU).
   Override with `RAZZY_GPU=igpu`. Add `--hq` to `view` for full shadow quality.
+
+The code is being restructured into reusable parts, physics, components, robots and world
+features: see **[docs/architecture.md](docs/architecture.md)**.
 
 ### Grounded vehicle design
 Size a drone or rover from a mission spec and a part database, then simulate the result
@@ -94,15 +82,11 @@ env.reset(variants=range(256)); env.act(actions); env.step(33); env.imu, env.gns
 ~13x the Python reference per env and ~200x on 16 threads (forest drone, all sensors on).
 See **[docs/cpp_core.md](docs/cpp_core.md)**.
 
-### C++ batched rollouts
+### C++ batched-rollout benchmark
+Physics only, against the same `scene.xml` (one shared model, N data, thread pool):
 ```bash
 cmake -S sim/cpp -B sim/cpp/build && cmake --build sim/cpp/build -j
-sim/cpp/build/batch_rollout sim/generated/crop_rover-s0/scene.xml 128 32 1000
+sim/cpp/build/batch_rollout sim/generated/mars_yard-s0/scene.xml 128 32 1000
 ```
 
-### Writing your own scene
-Drop a file into `sim/custom/` and it's picked up automatically. Start from
-[`sim/custom/pond_survey.py`](sim/custom/pond_survey.py) and follow
-**[docs/custom_scenes.md](docs/custom_scenes.md)** (builder API, terrain, vegetation, robots,
-custom controllers, wind, conventions, checklist). Internals and benchmarks:
-[sim/README.md](sim/README.md).
+Internals: [sim/README.md](sim/README.md).

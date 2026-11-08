@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from .common import Pack
-from .drone import rotor_point
+from ..physics.battery import Pack
+from ..physics.dc_motor import gearmotor_current
+from ..physics.propeller import rotor_point
 
 
 class DronePlant:
@@ -69,7 +70,7 @@ class RoverPlant:
         d, m, p = self.sim.d, self.sim.m, self.p
         tau = np.abs(d.actuator_force[self.act])
         u = np.abs(d.ctrl[self.act])
-        i_mot = self.i0 + (self.i_s - self.i0) * np.minimum(tau / self.tau_s, 1.0)
+        i_mot = gearmotor_current(tau, self.i0, self.i_s, self.tau_s, saturate=True)
         self.power = float(np.sum(self.v * u * i_mot)) + p["avionics_w"] + self.n_servo * p["servo_w"]
         self.v, self.i = self.pack.terminal(self.power, self.soc)
         self.soc = max(0.0, self.soc - self.i * dt / 3600.0 / self.pack.cap_ah)

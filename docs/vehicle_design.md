@@ -8,7 +8,8 @@ physics, not hand-picked values. There are two vehicles:
 | forest-inspection quadrotor (optionally caged) | `sim/design/configs/drone_forest.toml` | `forest_grounded` |
 | six-wheel rocker-bogie rover (Mars-rover-style suspension, 4-wheel steering) | `sim/design/configs/rover_yard.toml` | `mars_yard` |
 
-Both use the shared part database `sim/design/configs/components.toml`.
+Both use the shared part database in `sim/parts/` (one TOML file per domain). The
+equations are in `sim/physics/`.
 
 ## Workflow
 
@@ -35,11 +36,23 @@ constraints they violate**. That tells you whether to relax a requirement or add
 
 ## What the files mean
 
-### `components.toml`: the part database
+### `sim/parts/*.toml`: the part database
 
 Each part is a TOML table, for example `[motor.m2207_1750kv]`. To add a real part, copy
-its datasheet values into a new table and the optimiser will consider it automatically.
-Sections:
+its datasheet values into a new table in the right file, and the optimiser will consider it
+automatically. In Python: `from sim import parts; parts.get("motor", "m2207_1750kv")`.
+
+| file | sections |
+|---|---|
+| `propulsion.toml` | `motor.*`, `prop.*` |
+| `energy.toml` | `battery.*`, `chemistry.*` (open-circuit voltage curves) |
+| `structure.toml` | `arm_tube.*`, `rover_tube.*`, `frame` |
+| `drive.toml` | `wheel.*`, `drive_motor.*`, `steer_servo.*` |
+| `electronics.toml` | `avionics.*` |
+| `sensors.toml` | `imu.*`, `baro.*`, `mag.*`, `gnss.*`, `depth_camera.*`, `rgb_camera.*` |
+| `compute.toml` | `compute.*` |
+
+The key fields per section:
 
 | section | key fields |
 |---|---|
@@ -71,7 +84,7 @@ Sections:
 
 ## The models
 
-### Drone (`sim/design/drone.py`)
+### Drone (`sim/design/drone.py`, equations in `sim/physics/propeller.py`, `dc_motor.py`, `battery.py`, `beam.py`)
 
 For one rotor producing thrust *T*:
 
@@ -84,7 +97,7 @@ P_bus = 4·V·I / η_esc + P_avionics     drawn from the battery
 ```
 
 - **Battery:** terminal voltage = cells × OCV(state of charge) − I·R_pack, with OCV curves
-  per chemistry in `common.py`.
+  per chemistry in `sim/parts/energy.toml`.
 - **Maximum thrust:** the highest thrust at which the motor still has voltage headroom
   (duty ≤ 95 % of bus voltage), stays under its current limit, and the pack stays under its
   C-rating. It's checked at mid charge and **at end of discharge**, which is where
@@ -95,7 +108,7 @@ P_bus = 4·V·I / η_esc + P_avionics     drawn from the battery
 - **Motor lag:** the linearised speed-loop time constant `τ = J / (2·kq·ω + Kt²/R)`, from
   rotor + prop inertia and the prop drag constant.
 
-### Rover (`sim/design/rover.py`)
+### Rover (`sim/design/rover.py`, equations in `sim/physics/vehicle.py`, `dc_motor.py`, `beam.py`)
 
 - **Geometry scales with wheel radius:** wheel spacing 2r + 4 cm, rocker pivot height
   ≥ 1.9 r, and the bogie pivot at 1.55 r.
@@ -146,7 +159,7 @@ P_bus = 4·V·I / η_esc + P_avionics     drawn from the battery
 
 ## Extending
 
-- **New part:** add a table to `components.toml`. Nothing else is needed.
+- **New part:** add a table to the right file in `sim/parts/`. Nothing else is needed.
 - **New requirement:** add a key to the mission file, compute the quantity in `evaluate()`,
   and append a message to `violations` when it's not met.
 - **New vehicle type:** follow the same pattern: `evaluate` + `optimize` + `best` + `report` +

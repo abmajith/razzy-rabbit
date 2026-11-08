@@ -1,0 +1,27 @@
+# Compute: where the policy runs
+#
+# Datasheet values only: no code reads a specific part. Values are representative of
+# commonly available parts (rounded from typical datasheets), NOT vendor-certified: copy
+# your real parts' datasheet numbers in here. Add a part by adding a [section.name] block.
+#
+# Units: SI unless the key says otherwise (_g grams, _mm millimetres, _in inches,
+#        _mah milliamp-hours, kv rpm/V).
+
+# =====================================================================================
+# COMPUTE: where the policy runs. inference_ms is for a small depth-input CNN; measure
+# your own network on the real board and put the numbers here.
+# =====================================================================================
+[compute.oakd_myriadx]
+note = "Myriad X VPU inside the OAK-D (power counted in avionics.oakd_lite)"
+inference_ms = [25, 45]
+rate_hz = 15
+
+[compute.pi_zero2w]
+note = "Raspberry Pi Zero 2 W CPU"
+inference_ms = [60, 150]
+rate_hz = 5
+
+[compute.pi5_hailo8l]
+note = "Raspberry Pi 5 + Hailo-8L NPU"
+inference_ms = [8, 15]
+rate_hz = 30

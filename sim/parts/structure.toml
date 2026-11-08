@@ -1,0 +1,60 @@
+# Structure: tubes and frame
+#
+# Datasheet values only: no code reads a specific part. Values are representative of
+# commonly available parts (rounded from typical datasheets), NOT vendor-certified: copy
+# your real parts' datasheet numbers in here. Add a part by adding a [section.name] block.
+#
+# Units: SI unless the key says otherwise (_g grams, _mm millimetres, _in inches,
+#        _mah milliamp-hours, kv rpm/V).
+
+# =====================================================================================
+# DRONE: frame structure
+#   arm tubes (carbon fibre): od/id mm, e_gpa Young's modulus, density kg/m^3
+# =====================================================================================
+[arm_tube.cf_8x6]
+od_mm = 8
+id_mm = 6
+e_gpa = 70
+density = 1600
+
+[arm_tube.cf_10x8]
+od_mm = 10
+id_mm = 8
+e_gpa = 70
+density = 1600
+
+[arm_tube.cf_12x10]
+od_mm = 12
+id_mm = 10
+e_gpa = 70
+density = 1600
+
+[arm_tube.cf_16x14]
+od_mm = 16
+id_mm = 14
+e_gpa = 70
+density = 1600
+
+[frame]
+center_plate_g = 35          # top + bottom carbon plates, standoffs
+motor_mount_g = 4            # per arm
+wiring_frac = 0.05           # wires, screws, straps as fraction of everything else
+cage_rod_g_per_m = 12        # 3 mm carbon rod used for the protective cage
+esc_efficiency = 0.93
+esc_max_duty = 0.95
+
+# rover structure: aluminium square tube for rockers / bogies / body frame
+[rover_tube.al_20x20x1_5]
+side_mm = 20
+wall_mm = 1.5
+density = 2700
+
+[rover_tube.al_25x25x2]
+side_mm = 25
+wall_mm = 2.0
+density = 2700
+
+[rover_tube.al_30x30x2]
+side_mm = 30
+wall_mm = 2.0
+density = 2700

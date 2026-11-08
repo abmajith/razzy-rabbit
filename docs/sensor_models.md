@@ -17,7 +17,7 @@ numbers and the way the parts are mounted.
 | layer | where it lives | status |
 |---|---|---|
 | mission and requirements | `drone_forest.toml` `[mission]` | sizing (see [vehicle_design.md](vehicle_design.md)) |
-| body, propulsion, energy | parts in `components.toml`, chosen by the optimiser | grounded |
+| body, propulsion, energy | parts in `sim/parts/*.toml`, chosen by the optimiser | grounded |
 | **sensors** | `[sensors]`: part names → `[imu.*]`, `[baro.*]`, `[mag.*]`, `[gnss.*]`, `[depth_camera.*]`, `[rgb_camera.*]` | **this step** |
 | **installation** | `[installation]`: soft mount, prop balance, antenna height, wiring | **this step** |
 | **site** | `[environment]`: Earth magnetic field | **this step** |

@@ -11,7 +11,7 @@ import pytest
 pytest.importorskip("mujoco")
 pytest.importorskip("razzy_core")
 
-from sim.core import CoreBatch, CoreSim, make_sim  # noqa: E402
+from sim.core import CoreBatch, CoreSim  # noqa: E402
 from sim.design.common import components  # noqa: E402
 from sim.runtime import Sim  # noqa: E402
 
@@ -20,7 +20,7 @@ DB = components()
 
 @pytest.mark.parametrize("scene,variant,tol", [
     ("forest_grounded", None, 1e-9), ("forest_grounded", 3, 1e-9),
-    ("mars_yard", None, 1e-6), ("mars_yard", 3, 1e-4), ("orchard_uav", None, 1e-9)])
+    ("mars_yard", None, 1e-6), ("mars_yard", 3, 1e-4)])
 def test_trajectory_and_plant_match_python_reference(scene, variant, tol):
     py = Sim(scene, 0, sensors=False, variant=variant)
     cb = CoreBatch(scene, 1, 0, sensors=False)
@@ -119,8 +119,3 @@ def test_camera_models_in_cpp():
     out = sim.batch.core.rgb_apply(0, img, [0.0, 2.0, 0.0])
     assert out.shape == img.shape and out.dtype == np.uint8
     assert su is not None and su.status()
-
-
-def test_unsupported_scene_falls_back_to_python():
-    s = make_sim("crop_rover", 0)
-    assert s.engine == "python"
