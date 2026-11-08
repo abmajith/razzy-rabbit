@@ -55,7 +55,7 @@ def vibration_peaks(x: np.ndarray, rate: float, k: int = 3) -> list[tuple[float,
 def report(suite) -> str:
     """Summary of a SensorSuite run with record=True: errors vs ground truth, with the
     datasheet values next to them so mismatches are obvious."""
-    L = {k: np.asarray(v) for k, v in suite.log.items() if v}
+    L = {k: np.asarray(v) for k, v in suite.log.items() if len(v)}
     sp = suite.spec
     lines = []
     if "imu" in L:

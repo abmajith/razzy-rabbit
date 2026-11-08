@@ -61,8 +61,10 @@ sim/
   design/      vehicle sizing: configs/*.toml, drone.py, rover.py (optimiser + generator), plant.py
   sensing/     sensor/latency/compute models, scene coupling (GNSS sky view), Allan/FFT analysis
   uncertainty.py  [uncertainty] ranges -> per-episode vehicle variants (Sim.reset(variant))
+  core.py      front end of the C++ core: CoreBatch (training), CoreSim (viewer), make_sim
   gpu.py       picks the discrete GPU for viewer (DRI_PRIME) and headless EGL
   custom/      developer scenes + controllers, auto-loaded (pond_survey.py example)
+  cpp/core/    razzy_core: C++ envs (physics, controllers, plants, sensors), nanobind module
   cpp/         C++ batched rollout benchmark against the same scene.xml
   generated/   build output (git-ignored)
 ```

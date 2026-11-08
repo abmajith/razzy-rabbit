@@ -134,9 +134,9 @@ class QuadMission:
                 dy = (yaw_t - self.yaw + np.pi) % (2 * np.pi) - np.pi
                 self.yaw += np.clip(dy, -1.2 * dt, 1.2 * dt)
         self.ctl(p_d, v_d, self.yaw)
-        if self.sim.wind is not None:  # aerodynamic drag in the wind field
-            f = self.sim.wind.drag_force(self.ctl.pos, self.ctl.vel, self.CdA, t)
-            self.sim.d.xfrc_applied[self.ctl.bid, :3] = f
+        # aerodynamic drag in the wind field (assigned every step: the plant adds rotor drag on top)
+        f = self.sim.wind.drag_force(self.ctl.pos, self.ctl.vel, self.CdA, t) if self.sim.wind is not None else 0.0
+        self.sim.d.xfrc_applied[self.ctl.bid, :3] = f
 
 
 # ======================================================================================

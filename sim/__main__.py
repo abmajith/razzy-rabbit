@@ -7,10 +7,12 @@
                                         headless MP4: chase view + onboard RGB + depth insets
   design drone|rover [--config FILE] [--top N]
                                         size a vehicle from a mission file (sim/design/configs)
-  randomize <scene> [--n N] [--seconds S]
+  randomize <scene> [--n N] [--seconds S]   (all variants in parallel on the C++ core)
                                         draw N vehicles from the mission's [uncertainty]
                                         ranges, run each, report robustness + sensitivities
   sensors <scene> [--seconds S] [--log FILE.npz]
+  (view/render/sensors/randomize take --engine core|python: C++ core by default,
+   the readable Python reference on request or when a scene needs it)
                                         run a designed vehicle, report its sensor errors
                                         (IMU noise/vibration, GNSS under canopy, baro, mag)
 """
@@ -64,8 +66,9 @@ def cmd_view(a):
     print(f"[sim] viewer GPU: {gpu.select('glfw')}", flush=True)
     import mujoco
     import mujoco.viewer
-    from .runtime import Sim
-    sim = Sim(a.scene, a.seed, rebuild=a.rebuild, variant=a.variant)
+    from .core import make_sim
+    sim = make_sim(a.scene, a.seed, rebuild=a.rebuild, variant=a.variant, engine=a.engine)
+    print(f"[sim] engine: {sim.engine}", flush=True)
     if not a.hq:  # interactive: lighter shadows/MSAA keep the UI responsive
         sim.m.vis.quality.shadowsize = 4096
         sim.m.vis.quality.offsamples = 4
@@ -78,6 +81,7 @@ def cmd_view(a):
     before = set(threading.enumerate())
     v = mujoco.viewer.launch_passive(sim.m, sim.d)
     viewer_threads = [t for t in threading.enumerate() if t not in before]
+    last_print = 0
     try:
         v.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
         v.cam.trackbodyid = sim.m.body(sim.robot["body"]).id
@@ -92,7 +96,8 @@ def cmd_view(a):
             if not v.is_running():
                 break
             v.sync()
-            if sim.plant is not None and int(sim.d.time / 5) != int((sim.d.time - frame_dt) / 5):
+            if sim.plant is not None and int(sim.d.time / 5) > last_print:
+                last_print = int(sim.d.time / 5)
                 print(f"[sim] t={sim.d.time:6.1f}s  {sim.plant.status()}", flush=True)
                 if sim.sensors is not None:
                     print(f"[sim]            {sim.sensors.status()}", flush=True)
@@ -117,8 +122,9 @@ def cmd_render(a):
     print(f"[sim] render GPU: {gpu.select(os.environ['MUJOCO_GL'])}", flush=True)
     import imageio.v2 as iio
     import mujoco
-    from .runtime import Sim
-    sim = Sim(a.scene, a.seed, rebuild=a.rebuild, variant=a.variant)
+    from .core import make_sim
+    sim = make_sim(a.scene, a.seed, rebuild=a.rebuild, variant=a.variant, engine=a.engine)
+    print(f"[sim] engine: {sim.engine}", flush=True)
     W, H = a.width, a.width * 9 // 16
     iw, ih = W // 4, H // 4
     main = mujoco.Renderer(sim.m, H, W)
@@ -193,20 +199,15 @@ def cmd_render(a):
         print(f"[sim] sensors: {sim.sensors.status()}")
 
 
-def cmd_randomize(a):
+def _variants_python(a):
     from .runtime import Sim
-    from .uncertainty import PARAMS
     sim = Sim(a.scene, a.seed, rebuild=a.rebuild)
-    unc = sim.meta0.get("uncertainty")
-    if not unc:
+    if not sim.meta0.get("uncertainty"):
         raise SystemExit(f"{a.scene}: no [uncertainty] spec (use a designed vehicle: forest_grounded, mars_yard)")
-    print(f"[sim] {a.scene}: {a.n} variants x {a.seconds:.0f} s, ranges from the mission's [uncertainty]")
     nsteps = int(a.seconds / sim.m.opt.timestep)
-    rows, vecs, names = [], [], None
-    t_start = time.time()
+    out = []
     for k in range(a.n):
         sim.reset(k)
-        names, vec = sim.param_vector()
         bid = sim.m.body(sim.robot["body"]).id
         ctl = sim.ctrls[0] if sim.ctrls else None
         errs, pw, tilt = [], [], 0.0
@@ -216,14 +217,50 @@ def cmd_randomize(a):
                 errs.append(getattr(ctl, "err", 0.0))
                 pw.append(sim.plant.power if sim.plant else 0.0)
                 tilt = max(tilt, float(np.degrees(np.arccos(np.clip(sim.d.xmat[bid][8], -1, 1)))))
-        e = np.asarray(errs)
+        out.append((np.asarray(errs), np.asarray(pw), tilt, sim.rejected, sim.param_vector()))
+    return out
+
+
+def _variants_core(a):
+    """All variants in parallel on the C++ core (one env per variant)."""
+    from .core import CoreBatch
+    b = CoreBatch(a.scene, a.n, a.seed, sensors=False, rebuild=a.rebuild)
+    if not b.meta0.get("uncertainty"):
+        raise SystemExit(f"{a.scene}: no [uncertainty] spec (use a designed vehicle: forest_grounded, mars_yard)")
+    b.reset(variants=list(range(a.n)))
+    chunks = int(a.seconds / b.timestep) // 25
+    errs, pw, tilt = [], [], np.zeros(a.n)
+    for _ in range(chunks):
+        b.step(25)
+        if b.time[0] > 4.0:
+            errs.append(b.err.copy())
+            pw.append(b.plant[:, 3].copy())
+            tilt = np.maximum(tilt, b.tilt_deg)
+    E, P = np.asarray(errs), np.asarray(pw)
+    return [(E[:, k], P[:, k], float(tilt[k]), b.rejected[k], b.param_vector(k)) for k in range(a.n)]
+
+
+def cmd_randomize(a):
+    from .uncertainty import PARAMS
+    print(f"[sim] {a.scene}: {a.n} variants x {a.seconds:.0f} s, ranges from the mission's [uncertainty] "
+          f"(engine: {a.engine})")
+    t_start = time.time()
+    if a.engine == "core":
+        try:
+            results = _variants_core(a)
+        except ImportError as e:
+            print(f"[sim] C++ core unavailable ({e}); using the Python reference")
+            results = _variants_python(a)
+    else:
+        results = _variants_python(a)
+    rows, vecs, names = [], [], None
+    for k, (e, pw, tilt, rej, (names, vec)) in enumerate(results):
         rms, mx = float(np.sqrt(np.mean(e * e))), float(e.max())
         status = "LOST" if (mx > 5.0 or tilt > 75) else "ok"
-        rows.append(dict(k=k, rej=sim.rejected, rms=rms, max=mx, tilt=tilt, power=float(np.mean(pw)),
-                         soc=sim.plant.soc if sim.plant else 1.0, status=status))
+        rows.append(dict(k=k, rej=rej, rms=rms, max=mx, tilt=tilt, power=float(np.nanmean(pw)), status=status))
         vecs.append(vec)
         print(f"  variant {k:3d}  track rms {rms:5.2f} m  max {mx:5.2f} m  tilt max {tilt:4.0f} deg  "
-              f"power {np.mean(pw):6.1f} W  [{status}]  (rejected draws: {sim.rejected})", flush=True)
+              f"power {np.nanmean(pw):6.1f} W  [{status}]  (rejected draws: {rej})", flush=True)
     rms = np.array([r["rms"] for r in rows])
     lost = sum(r["status"] != "ok" for r in rows)
     rej = sum(r["rej"] for r in rows)
@@ -246,9 +283,10 @@ def cmd_randomize(a):
 
 
 def cmd_sensors(a):
-    from .runtime import Sim
+    from .core import make_sim
     from .sensing.analysis import report
-    sim = Sim(a.scene, a.seed, rebuild=a.rebuild, variant=a.variant, record=True)
+    sim = make_sim(a.scene, a.seed, rebuild=a.rebuild, variant=a.variant, record=True, engine=a.engine)
+    print(f"[sim] engine: {sim.engine}", flush=True)
     if sim.sensors is None:
         raise SystemExit(f"{a.scene}: robot has no sensor spec (use a designed vehicle, e.g. forest_grounded, mars_yard)")
     t0 = time.time()
@@ -256,7 +294,7 @@ def cmd_sensors(a):
     print(f"[sim] {a.scene}: {a.seconds:.0f} s simulated in {time.time() - t0:.1f} s\n")
     print(report(sim.sensors))
     if a.log:
-        np.savez_compressed(a.log, **{k: np.asarray(v) for k, v in sim.sensors.log.items() if v},
+        np.savez_compressed(a.log, **{k: np.asarray(v) for k, v in sim.sensors.log.items() if len(v)},
                             columns=np.array([
                                 "imu: t gx gy gz ax ay az | true gx gy gz ax ay az",
                                 "baro: t h | true h", "mag: t bx by bz | true bx by bz",
@@ -278,6 +316,9 @@ def main(argv=None):
             s.add_argument("--wind", action="store_true", help="draw wind-field arrows")
         if name == "view":
             s.add_argument("--hq", action="store_true", help="full 8k shadows + 8x MSAA (slower)")
+        if name in ("view", "render", "sensors", "randomize"):
+            s.add_argument("--engine", choices=["core", "python"], default="core",
+                           help="core: C++ (default, falls back when unsupported); python: readable reference")
         if name in ("view", "render", "sensors"):
             s.add_argument("--variant", type=int, default=None,
                            help="draw vehicle K from the [uncertainty] ranges (default: nominal)")

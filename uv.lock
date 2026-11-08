@@ -2569,6 +2569,21 @@ wheels = [
 ]
 
 [[package]]
+name = "razzy-core"
+version = "0.1.0"
+source = { directory = "sim/cpp/core" }
+dependencies = [
+    { name = "mujoco" },
+    { name = "numpy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mujoco", specifier = "==4.0.0" },
+    { name = "numpy" },
+]
+
+[[package]]
 name = "razzy-rabbit"
 version = "0.1.0"
 source = { editable = "." }
@@ -2591,6 +2606,7 @@ sim = [
     { name = "imageio" },
     { name = "imageio-ffmpeg" },
     { name = "mujoco" },
+    { name = "razzy-core" },
 ]
 
 [package.metadata]
@@ -2600,13 +2616,14 @@ requires-dist = [
     { name = "imageio-ffmpeg", marker = "extra == 'sim'", specifier = ">=0.8.1" },
     { name = "manifold3d", specifier = ">=3.4.1" },
     { name = "meshio", specifier = ">=5.3.5" },
-    { name = "mujoco", marker = "extra == 'sim'", specifier = ">=3.17.0" },
+    { name = "mujoco", marker = "extra == 'sim'", specifier = "==4.0.0" },
     { name = "numpy" },
     { name = "pyqt6" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-qt", specifier = ">=4.5.0" },
     { name = "pyvista", extras = ["all"] },
     { name = "pyvistaqt" },
+    { name = "razzy-core", marker = "extra == 'sim'", directory = "sim/cpp/core" },
     { name = "scipy", specifier = ">=1.15.3" },
     { name = "trimesh", specifier = ">=4.11.5" },
 ]
