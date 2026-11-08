@@ -15,6 +15,7 @@ from __future__ import annotations
 import numpy as np
 
 from .builder import Builder
+from .control import Ackermann, FollowPath, Mixer, PurePursuit, Se3Controller, WheelSpeedPI
 from .world import Clear, PowerLaw, Uniform, World
 from .world.features import (DRY_SOIL, FOREST_FLOOR, MARS_SOIL, Craters, DriveLoop, Forest, Grass, Ground, Hills,
                              Lander, Logs, PlantColours, Rocks, Sun, Trail, Wind)
@@ -49,7 +50,7 @@ def forest_grounded(seed: int = 0) -> Builder:
     b = w.builder
     drone_design.to_mjcf(b, "uav", w.ground_point(*route[0][:2], clearance=0.1), best, cfg, chase_offset=(-2.5, 0.0, 1.0))
     w.overview([-82, -78, 50], [0, 0, 0])
-    b.meta.update(controller="quad_waypoints", waypoints_agl=route, cruise=3.0)
+    b.meta["control"] = (FollowPath(route, agl=True, cruise=3.0) >> Se3Controller() >> Mixer()).spec()
     return b
 
 
@@ -75,7 +76,8 @@ def mars_yard(seed: int = 0) -> Builder:
     start = w.ground_point(*loop.start, clearance=best.geo["H"] + 0.05)
     rover_design.to_mjcf(b, "rover", start, best, cfg, yaw=0.0)
     w.overview([-22, -26, 14], [0, 0, 0])
-    b.meta.update(controller="rover_ackermann", waypoints=loop.path(), speed=cfg["mission"]["cruise_speed_mps"])
+    b.meta["control"] = (PurePursuit(loop.path(), speed=cfg["mission"]["cruise_speed_mps"])
+                         >> Ackermann() >> WheelSpeedPI()).spec()
     return b
 
 

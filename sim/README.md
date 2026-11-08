@@ -24,7 +24,8 @@ sim/
   world/       World + features (Hills, Craters, Trail, DriveLoop, Ground, Forest, Grass,
                Rocks, Logs, Lander, Sun, Wind); terrain.py, flora.py, sampling.py   [step 5]
   scenes.py    the grounded scenes as compositions: forest_grounded, mars_yard
-  control.py   SE(3) quadrotor control + waypoint mission, Ackermann pure pursuit
+  control/     chainable controller stages: FollowPath, Se3Controller, Mixer, PurePursuit,
+               Ackermann, WheelSpeedPI, VelocityCommand, DriveCommand              [step 6]
   runtime/     Python reference engine: sim.py (step loop), power.py (generic power train),
                aero.py (rotor drag), sensors.py (sensor runtime, GNSS sky view)    [step 4]
   core.py      front end of the C++ core: CoreBatch (training), CoreSim (viewer), make_sim

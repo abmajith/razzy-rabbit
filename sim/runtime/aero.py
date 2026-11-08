@@ -6,11 +6,28 @@ to total thrust:
 
     F = -k_drag * sum(T) * v_perp,   v_perp = airspeed minus its component along the body z axis
 
-(Body drag in the wind is applied by the mission controller; see physics.aero.)
+Body drag: quadratic drag of the whole vehicle in the wind field (physics.aero),
+F = 1/2 rho CdA |v_rel| v_rel, assigned every step (rotor drag is added on top).
 """
 from __future__ import annotations
 
 import numpy as np
+
+
+class BodyDrag:
+    def __init__(self, sim, robot: dict) -> None:
+        m = sim.m
+        self.sim, self.CdA = sim, robot.get("drag_CdA", 0.04)
+        self.bid = m.body(robot["body"]).id
+        jnt = m.body_jntadr[self.bid]
+        self.qa, self.va = m.jnt_qposadr[jnt], m.jnt_dofadr[jnt]
+
+    def update(self, t: float, dt: float) -> None:
+        sim = self.sim
+        d = sim.d
+        pos, vel = d.qpos[self.qa:self.qa + 3], d.qvel[self.va:self.va + 3]
+        f = sim.wind.drag_force(pos, vel, self.CdA, t) if sim.wind is not None else 0.0
+        d.xfrc_applied[self.bid, :3] = f
 
 
 class RotorDrag:

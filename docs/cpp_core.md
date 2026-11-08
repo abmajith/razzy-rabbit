@@ -4,7 +4,7 @@ Two implementations of the same simulator, with different jobs:
 
 | | Python reference | C++ core |
 |---|---|---|
-| where | `sim/runtime/` (sim, power, aero, sensors), `sim/control.py`, `sim/sensing/`, `sim/physics/` | `sim/cpp/core/csrc/*.cpp` |
+| where | `sim/runtime/` (sim, power, aero, sensors), `sim/control/`, `sim/sensing/`, `sim/physics/` | `sim/cpp/core/csrc/*.cpp` |
 | job | **the specification**: readable, easy to change, where new models are written first | **what runs**: viewer, render, sensor reports, robustness sweeps, training |
 | speed (forest drone, with sensors) | ~1.6k steps/s | ~21k steps/s per env, ~330k steps/s on 16 threads |
 

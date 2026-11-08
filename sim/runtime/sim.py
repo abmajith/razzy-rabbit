@@ -1,4 +1,4 @@
-"""Load a generated scene and step it with its reference controller + wind."""
+"""Load a generated scene and step it: controller chain, wind drag, power train, physics, sensors."""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ import numpy as np
 
 from .. import scenes as _scenes  # noqa: F401  (registers the scenes)
 from ..builder import GENERATED
-from ..control import CONTROLLERS
+from ..control import from_spec
 from ..physics.aero import WindField
 from ..world.terrain import Terrain
 
@@ -72,8 +72,11 @@ class Sim:
         mujoco.mj_forward(m, d)
         # controllers are built against the NOMINAL model (what the designer knows) ...
         self.ctrls = []
-        if self.use_controller and self.meta.get("controller") in CONTROLLERS:
-            self.ctrls.append(CONTROLLERS[self.meta["controller"]](self, self.meta))
+        if self.use_controller and "control" in self.meta:
+            self.ctrls.append(from_spec(self.meta["control"]).attach(self))
+        if "drag_CdA" in self.robot:                          # body drag in the wind (physics)
+            from .aero import BodyDrag
+            self.ctrls.append(BodyDrag(self, self.robot))
         # ... the physics gets the drawn vehicle
         if self.params:
             U.apply_model(m, d, self.robot, self.params)

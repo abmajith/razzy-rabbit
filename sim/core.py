@@ -3,7 +3,7 @@
 The C++ core runs physics, controller, power-train plant, sensors and latency for many
 environments in parallel. Python only builds one config dict per environment at reset
 (from the same scene meta + [uncertainty] draw the Python reference uses) and reads the
-results as numpy arrays. The readable Python reference (sim/runtime.py Sim, sim/control.py,
+results as numpy arrays. The readable Python reference (sim/runtime/ Sim, sim/control/,
 sim/runtime/power.py, sim/runtime/sensors.py, sim/sensing/) stays the specification; tests/sim/test_core.py checks
 the C++ core against it.
 
@@ -27,7 +27,31 @@ from .runtime.sensors import FOLIAGE_WORDS, by_type
 from .physics.aero import WindField
 
 MODES = {"mission": 0, "setpoint": 1, "ctrl": 2}
-CORE_CONTROLLERS = {"quad_waypoints", "rover_ackermann", None}
+# controller chains the C++ core implements (with these exact parameters); step 7 makes it generic
+CORE_CHAINS = {("follow_path", "se3", "mixer"): "quad", ("pure_pursuit", "ackermann", "wheel_speed_pi"): "rover"}
+
+
+def core_chain(meta: dict) -> tuple[str, dict]:
+    """("quad" | "rover", {stage name: params}) if the C++ core can run this scene's controller
+    chain, else raise Unsupported (the CLI then falls back to the Python reference)."""
+    from .control import STAGES
+    spec = meta.get("control")
+    if spec is None:
+        raise Unsupported("scene has no controller chain")
+    if spec.get("source", "truth") != "truth":
+        raise Unsupported(f"state source '{spec['source']}' is not in the C++ core")
+    names = tuple(st["type"] for st in spec["stages"])
+    if names not in CORE_CHAINS:
+        raise Unsupported(f"controller chain {' >> '.join(names)} has no C++ version yet")
+    params = {}
+    for st in spec["stages"]:
+        p = {k: v for k, v in st.items() if k != "type"}
+        fixed = {k: v for k, v in STAGES[st["type"]].defaults.items() if k not in ("waypoints", "agl", "cruise", "speed")}
+        changed = {k for k in fixed if k in p and p[k] != fixed[k]}
+        if changed:
+            raise Unsupported(f"stage {st['type']} uses non-default {sorted(changed)}; the C++ core has the defaults only")
+        params[st["type"]] = p
+    return CORE_CHAINS[names], params
 
 
 class Unsupported(Exception):
@@ -115,8 +139,7 @@ class CoreBatch:
         self.name, self.folder, self.seed, self.mode = name, folder, seed, mode
         self.use_sensors, self.record = sensors, record
         self.meta0 = json.loads((folder / "meta.json").read_text())
-        if self.meta0.get("controller") not in CORE_CONTROLLERS:
-            raise Unsupported(f"controller '{self.meta0.get('controller')}' only exists in the Python reference")
+        core_chain(self.meta0)                             # raises Unsupported if C++ can't run it
         self.terrain = load_terrain(self.meta0, folder)
         phys = physics_model(folder)
         self.m = mujoco.MjModel.from_binary_path(phys)        # ids / names (same as the full model)
@@ -151,21 +174,21 @@ class CoreBatch:
                         "motor_gain": list(np.atleast_1d(g("motor_gain", []))), "motor_lag": g("motor_lag", 1.0),
                         "yaw_coef": g("yaw_coef", 1.0), "drive_torque": g("drive_torque", 1.0),
                         "drive_gain": list(np.atleast_1d(g("drive_gain", []))), "steer_kp": g("steer_kp", 1.0)}
-        ctrl = meta.get("controller")
-        if r.get("type") == "quadrotor":
-            agl = "waypoints_agl" in meta
-            wps = np.asarray(meta["waypoints_agl"] if agl else meta["waypoints_abs"], float)
+        kind, stages = core_chain(meta)
+        if kind == "quad":
+            fp = stages["follow_path"]
             cfg["quad"] = {"body": bid, "act": [m.actuator(a).id for a in r["actuators"]],
-                           "waypoints": wps.ravel().tolist(), "agl": int(agl), "cruise": meta.get("cruise", 3.0),
-                           "CdA": r.get("drag_CdA", 0.04)}
-        if ctrl == "rover_ackermann" or r.get("type") == "rocker_bogie":
+                           "waypoints": np.asarray(fp["waypoints"], float).ravel().tolist(), "agl": int(fp["agl"]),
+                           "cruise": fp["cruise"], "CdA": r.get("drag_CdA", 0.04)}
+        if kind == "rover":
+            pp = stages["pure_pursuit"]
             cfg["rover"] = {"body": bid, "drive": [m.actuator(a).id for a in r["drive"]],
                             "steer": [m.actuator(f"{s}_p").id for s in r["steer_xy"]],
                             "jdof": [int(m.jnt_dofadr[m.joint(f"{w}_j").id]) for w in r["wheels"]],
                             "wxy": np.asarray(r["wheel_xy"], float).ravel().tolist(),
                             "sxy": np.asarray(list(r["steer_xy"].values()), float).ravel().tolist(),
-                            "rw": r["wheel_radius"], "w0": r["omega0"], "v": meta.get("speed", 0.5),
-                            "waypoints": np.asarray(meta.get("waypoints", [[0, 0], [1, 0]]), float).ravel().tolist()}
+                            "rw": r["wheel_radius"], "w0": r["omega0"], "v": pp["speed"],
+                            "waypoints": np.asarray(pp["waypoints"], float).ravel().tolist()}
         if "quad" not in cfg and "rover" not in cfg:
             raise Unsupported(f"robot type '{r.get('type')}' has no C++ controller yet")
         if "rotor_speed" in meta:
