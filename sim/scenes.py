@@ -6,6 +6,8 @@ sim/generated/<scene>-s<seed>/{scene.xml, meta.json, terrain.bin, ground.png, me
   forest_trail     mixed forest on steep terrain, quadrotor following a hiking trail
   greenhouse       Venlo glasshouse, high-wire tomatoes, pipe-rail harvesting arm
   wind_turbine     ridge-top turbine inspection by UAV in a potential-flow wind field
+  forest_grounded  forest_trail flown by the quad sized from design/configs/drone_forest.toml
+  mars_yard        rocky test yard driven by the rocker-bogie rover sized from rover_yard.toml
 """
 from __future__ import annotations
 
@@ -226,8 +228,8 @@ def crop_rover(seed: int = 0) -> Builder:
 
 # ======================================================================================
 @scene
-def forest_trail(seed: int = 0) -> Builder:
-    b = Builder("forest_trail", seed)
+def forest_trail(seed: int = 0, _name: str = "forest_trail", _design: str | None = None) -> Builder:
+    b = Builder(_name, seed)
     rng = b.rng
     flora.plant_materials(b, rng)
     b.sky_and_sun(Lighting.sample(rng), shadow_extent=40)
@@ -278,7 +280,13 @@ def forest_trail(seed: int = 0) -> Builder:
     xs = np.linspace(-62, 62, 90)
     wps = [[float(x), float(trail_y(x)), 2.0] for x in xs]
     x0, y0 = wps[0][0], wps[0][1]
-    robots.quadrotor(b, "uav", [x0, y0, float(t.height(x0, y0)) + 0.15], chase_offset=(-3.0, 0.0, 1.2))
+    start = [x0, y0, float(t.height(x0, y0)) + 0.1]
+    if _design:   # sized from a mission file instead of the idealised demo quad
+        from .design import drone as drone_design
+        cfg, best = drone_design.best(_design)
+        drone_design.to_mjcf(b, "uav", start, best, cfg, chase_offset=(-2.5, 0.0, 1.0))
+    else:
+        robots.quadrotor(b, "uav", start, chase_offset=(-3.0, 0.0, 1.2))
     b.overview([-82, -78, 50], [0, 0, 0])
     b.meta.update(controller="quad_waypoints", waypoints_agl=wps, cruise=3.0,
                   wind=dict(U=1.5, heading_deg=float(rng.uniform(0, 360)), gust=0.5, z_ref=10, z0=1.0))
@@ -489,6 +497,86 @@ def wind_turbine(seed: int = 0) -> Builder:
                   wind=dict(U=7.0, heading_deg=heading, gust=1.5, z_ref=10, z0=0.05,
                             cylinders=[[0.0, 0.0, 2.0, tz + H]],
                             turbine=dict(hub=[0, 0, tz + H + 1.2], R=R_rot, Ct=0.8, k=0.075)))
+    return b
+
+
+@scene
+def forest_grounded(seed: int = 0) -> Builder:
+    """forest_trail flown by the quad sized from sim/design/configs/drone_forest.toml."""
+    return forest_trail(seed, _name="forest_grounded", _design="drone_forest.toml")
+
+
+MARS_SOIL = [(0.0, (0.40, 0.20, 0.11)), (0.45, (0.58, 0.31, 0.17)), (0.8, (0.68, 0.42, 0.26)),
+             (1.0, (0.78, 0.55, 0.38))]
+
+
+@scene
+def mars_yard(seed: int = 0) -> Builder:
+    """Rocky test yard (JPL Mars Yard style) for the rocker-bogie rover sized from rover_yard.toml."""
+    from .design import rover as rover_design
+    cfg, best = rover_design.best("rover_yard.toml")
+    b = Builder("mars_yard", seed)
+    rng = b.rng
+    light = Lighting.sample(rng, overcast=0.1)
+    light.sky_top, light.sky_horizon = np.array([0.55, 0.45, 0.40]), np.array([0.85, 0.68, 0.52])
+    light.haze = 0.45
+    b.sky_and_sun(light, shadow_extent=30)
+    b.material("rock", [0.42, 0.26, 0.18, 1], specular=0.1)
+
+    hx = hy = 40.0
+    n = 401
+    X, Y = np.meshgrid(np.linspace(-hx, hx, n), np.linspace(-hy, hy, n))
+    z = 1.2 * noise2(n, n, rng, octaves=6, base=2, persistence=0.5)
+    z += 0.08 * noise2(n, n, rng, octaves=3, base=24, persistence=0.5)       # small-scale roughness
+    craters = []
+    for _ in range(7):
+        cx, cy, R = rng.uniform(-30, 30), rng.uniform(-30, 30), rng.uniform(2.5, 7)
+        if np.hypot(cx, cy) < 6:
+            continue
+        rr = np.hypot(X - cx, Y - cy) / R
+        z += np.where(rr < 1, -0.22 * R * 0.25 * (1 - rr ** 2), 0) + 0.06 * R * np.exp(-((rr - 1) / 0.25) ** 2)
+        craters.append((cx, cy, R))
+    t = Terrain(z, hx, hy)
+    tex = colorize(t, rng, 2048, MARS_SOIL)
+    add_terrain(b, t, tex)
+
+    # driving loop; boulders keep clear of it, small rocks (climbable) are scattered on it
+    ang = np.linspace(0, 2 * np.pi, 9)[:-1] + rng.uniform(-0.2, 0.2, 8)
+    rad = rng.uniform(9, 14, 8)
+    wps = np.stack([rad * np.cos(ang), rad * np.sin(ang)], 1)
+    wps = np.vstack([[0.0, -3.0], wps])                                         # start near the lander
+    def seg_dist(x, y):
+        P = np.array([x, y])
+        dmin = 1e9
+        for a, c in zip(wps, np.roll(wps, -1, axis=0)):
+            ab = c - a
+            u = np.clip((P - a) @ ab / (ab @ ab), 0, 1)
+            dmin = min(dmin, np.linalg.norm(a + u * ab - P))
+        return dmin
+    climb = best.m["climb_m"]
+    for x, y in rng.uniform(-37, 37, (900, 2)):
+        size = 0.04 + 0.09 * rng.pareto(2.0)                                     # power-law sizes
+        if seg_dist(x, y) < 2.2 and size > 0.6 * climb:
+            continue
+        if np.hypot(x, y - 3) < 4:
+            continue
+        flora.rock(b, rng, x, y, float(t.height(x, y)) - 0.3 * size, size=min(size, 1.8))
+
+    # lander platform the rover drives off from
+    b.material("lander", [0.75, 0.75, 0.72, 1], specular=0.4)
+    lz = float(t.height(0, 3))
+    b.world += [f'<geom type="cylinder" size="1.6 .15" pos="0 3 {lz + 1.0}" material="lander"/>',
+                f'<geom type="box" size="1.1 1.1 .02" pos="0 3 {lz + 1.2}" euler="0 0 45" material="solar"/>']
+    for k in range(3):
+        a = 2 * np.pi * k / 3 + 0.5
+        b.world.append(f'<geom type="capsule" fromto="{1.2*np.cos(a):.2f} {3 + 1.2*np.sin(a):.2f} {lz + 1.0} '
+                       f'{2.0*np.cos(a):.2f} {3 + 2.0*np.sin(a):.2f} {lz + 0.05}" size=".05" material="alu"/>')
+
+    x0, y0 = 0.0, -3.0
+    rmeta_h = best.geo["H"]
+    rover_design.to_mjcf(b, "rover", [x0, y0, float(t.height(x0, y0)) + rmeta_h + 0.05], best, cfg, yaw=0.0)
+    b.overview([-22, -26, 14], [0, 0, 0])
+    b.meta.update(controller="rover_ackermann", waypoints=wps.tolist(), speed=cfg["mission"]["cruise_speed_mps"])
     return b
 
 

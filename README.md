@@ -70,6 +70,8 @@ generated as plain MJCF, so the same files load from Python and from C/C++.
 | `forest_trail` | quadrotor following a hiking trail through steep mixed forest |
 | `greenhouse` | pipe-rail trolley with an arm picking ripe tomatoes into a crate |
 | `wind_turbine` | quadrotor inspecting a spinning turbine in a potential-flow wind field |
+| `forest_grounded` | forest trail flown by a **quad sized from real parts** (`drone_forest.toml`) |
+| `mars_yard` | rocky yard driven by a **sized six-wheel rocker-bogie rover** (`rover_yard.toml`) |
 | `pond_survey` | example developer scene (`sim/custom/`): quadrotor orbiting a pond |
 
 ### Install
@@ -93,6 +95,16 @@ uv run --extra sim python -m sim build all --seed 3            # just generate a
   `*_wristcam`) and `overview`. Geom group 3 shows the invisible colliders.
 - The discrete GPU is selected automatically (here the Intel Arc rather than the AMD iGPU).
   Override with `RAZZY_GPU=igpu`. Add `--hq` to `view` for full shadow quality.
+
+### Grounded vehicle design
+Size a drone or rover from a mission spec and a part database, then simulate the result
+with motor lag, real thrust/torque curves and a draining battery:
+```bash
+uv run --extra sim python -m sim design drone       # edit sim/design/configs/drone_forest.toml
+uv run --extra sim python -m sim design rover       # edit sim/design/configs/rover_yard.toml
+uv run --extra sim python -m sim view mars_yard --rebuild
+```
+Details, models and how to add parts: **[docs/vehicle_design.md](docs/vehicle_design.md)**.
 
 ### C++ batched rollouts
 ```bash

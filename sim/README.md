@@ -11,6 +11,8 @@ binary/OBJ/PNG assets, so the same folder loads unchanged from C/C++ (`mj_loadXM
 | `forest_trail` | quadrotor | steep mixed forest (conifer / broadleaf / birch), rocks, fallen logs, undergrowth; flies a winding hiking trail at 2 m above ground |
 | `greenhouse` | pipe-rail trolley + scissor lift + 4-DoF arm + gripper | Venlo glasshouse, high-wire tomatoes that ripen from the bottom up, heating-pipe rails, grow lights; IK pick-and-place of ripe tomatoes into a crate |
 | `wind_turbine` | quadrotor | ridge-top turbine with a spinning rotor, hedgerows, pasture; helical tower inspection, then a pass in front of the rotor, all inside a potential-flow wind field |
+| `forest_grounded` | sized quadrotor | `forest_trail` flown by the quad chosen by `python -m sim design drone`; see [docs/vehicle_design.md](../docs/vehicle_design.md) |
+| `mars_yard` | sized rocker-bogie rover | rocky yard with craters and a lander; rover chosen by `python -m sim design rover` |
 | `pond_survey` | quadrotor | example developer scene in `sim/custom/`, with its own orbit controller; see [docs/custom_scenes.md](../docs/custom_scenes.md) |
 
 Every scene is a pure function of `(scene, seed)`: terrain, plant placement, time of day,
@@ -53,6 +55,7 @@ sim/
   wind.py      analytic wind field (log-law, doublets, turbulence, terrain, Jensen wake)
   control.py   SE(3) quadrotor control, pure-pursuit skid steer, DLS-IK harvesting
   runtime.py   Sim wrapper: load, step with controller + wind drag, draw wind arrows
+  design/      vehicle sizing: configs/*.toml, drone.py, rover.py (optimiser + generator), plant.py
   gpu.py       picks the discrete GPU for viewer (DRI_PRIME) and headless EGL
   custom/      developer scenes + controllers, auto-loaded (pond_survey.py example)
   cpp/         C++ batched rollout benchmark against the same scene.xml

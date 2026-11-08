@@ -28,6 +28,8 @@ def test_scene_builds_and_controller_runs(name):
     elif robot["type"] == "rover":
         assert p[0] - p0[0] > 2.0, "rover did not drive along the bed"
         assert abs(p[1] - p0[1]) < 0.3, "rover drifted out of its lane"
+    elif robot["type"] == "rocker_bogie":
+        assert np.linalg.norm(p[:2] - p0[:2]) > 2.0, "rover did not drive its loop"
     elif robot["type"] == "harvester":
         ctl = sim.ctrls[0]
         assert ctl.state != "travel" or ctl.k > 0, "harvester never reached a fruit"
