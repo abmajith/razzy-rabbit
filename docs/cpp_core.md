@@ -10,8 +10,7 @@ Two implementations of the same simulator, with different jobs:
 
 `view`, `render`, `sensors` and `randomize` use the C++ core by default. Pass
 `--engine python` for the reference. A scene whose controller exists only in Python
-(`crop_rover`, `greenhouse`, custom scenes) falls back to the reference automatically, and
-the CLI says so.
+falls back to the reference automatically, and the CLI says so.
 
 ## Architecture
 
@@ -119,8 +118,7 @@ different MuJoCo version, with the command to rebuild. `-DRAZZY_NATIVE=ON` adds
 
 ## Not in C++ yet
 
-- **Controllers:** `rover_serpentine` (crop rover), `harvest` (greenhouse arm) and custom
-  scene controllers. These scenes run on the Python engine.
+- **Controllers** that exist only in Python run their scene on the Python engine.
 - **Viewer perturbations:** mouse forces in the viewer act on the mirror, not on the C++
   physics.
 - **Rendering:** stays on MuJoCo's renderer (GPU). Batched rendering for vision policies

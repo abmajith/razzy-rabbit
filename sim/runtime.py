@@ -9,7 +9,7 @@ import numpy as np
 
 from . import scenes as _scenes  # noqa: F401  (registers sim/custom controllers)
 from .builder import GENERATED
-from .control import CONTROLLERS, TurbineSpin
+from .control import CONTROLLERS
 from .terrain import Terrain
 from .wind import WindField
 
@@ -74,8 +74,6 @@ class Sim:
         self.ctrls = []
         if self.use_controller and self.meta.get("controller") in CONTROLLERS:
             self.ctrls.append(CONTROLLERS[self.meta["controller"]](self, self.meta))
-        if "rotor_speed" in self.meta:
-            self.ctrls.append(TurbineSpin(self, self.meta))
         # ... the physics gets the drawn vehicle
         if self.params:
             U.apply_model(m, d, self.robot, self.params)

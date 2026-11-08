@@ -198,9 +198,9 @@ def report(cfg, designs, top=8) -> str:
 # ----------------------------------------------------------------------- generator ---
 def to_mjcf(b, name: str, pos, design: RoverDesign, cfg: dict, yaw: float = 0.0) -> dict:
     from ..builder import fmt, lookat_xyaxes
-    from ..robots import _robot_materials
+    from ..builder import robot_materials
 
-    _robot_materials(b)
+    robot_materials(b)
     b.material("rover_body", [0.85, 0.85, 0.82, 1], specular=0.3, shininess=0.3)
     b.material("gold_foil", [0.85, 0.65, 0.25, 1], specular=0.8, shininess=0.8, reflectance=0.1)
     db = components()

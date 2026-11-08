@@ -227,9 +227,9 @@ def _box_inertia(m, sx, sy, sz):
 def to_mjcf(b, name: str, pos, design: DroneDesign, cfg: dict, chase_offset=(-3.0, -1.8, 1.4)) -> dict:
     """Write the designed quadrotor into a Builder; returns robot meta (incl. plant params)."""
     from ..builder import fmt, lookat_xyaxes
-    from ..robots import _robot_materials
+    from ..builder import robot_materials
 
-    _robot_materials(b)
+    robot_materials(b)
     b.material("cage", [0.15, 0.15, 0.16, 1], specular=0.3)
     db = components()
     g, m = design.geo, design.m

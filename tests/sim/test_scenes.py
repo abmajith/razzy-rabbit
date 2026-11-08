@@ -25,20 +25,13 @@ def test_scene_builds_and_controller_runs(name):
         agl = p[2] - float(sim.terrain.height(p[0], p[1]))
         assert agl > 1.0, f"UAV did not take off (AGL {agl:.2f} m)"
         assert np.linalg.norm(p[:2] - p0[:2]) > 2.0, "UAV did not follow its mission"
-    elif robot["type"] == "rover":
-        assert p[0] - p0[0] > 2.0, "rover did not drive along the bed"
-        assert abs(p[1] - p0[1]) < 0.3, "rover drifted out of its lane"
     elif robot["type"] == "rocker_bogie":
         assert np.linalg.norm(p[:2] - p0[:2]) > 2.0, "rover did not drive its loop"
-    elif robot["type"] == "harvester":
-        ctl = sim.ctrls[0]
-        assert ctl.state != "travel" or ctl.k > 0, "harvester never reached a fruit"
-
 
 def test_same_seed_is_byte_identical():
     def digest():
-        build("pond_survey", 0)
-        folder = scene_dir("pond_survey", 0)
+        build("mars_yard", 0)
+        folder = scene_dir("mars_yard", 0)
         h = hashlib.md5()
         for f in sorted(folder.glob("*")):
             if f.suffix in {".xml", ".obj", ".bin", ".png", ".json"}:
