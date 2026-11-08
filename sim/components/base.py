@@ -171,6 +171,11 @@ class Component:
         self._mounts[name] = m
         return m
 
+    def contribute(self, robot, meta: dict) -> None:
+        """Add what the runtime needs to the robot meta (an electrical load, a sensor
+        entry...). Called once the robot is complete, so robot-wide facts (mass, centre of
+        mass, other components) are available. Default: nothing."""
+
     def mount(self, name: str) -> Mount:
         if name not in self._mounts:
             raise KeyError(f"{type(self).__name__} '{self.name}' has no mount '{name}'; "

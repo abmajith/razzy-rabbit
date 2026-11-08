@@ -40,6 +40,10 @@ class Board(Component):
         robot.info["avionics_w"] = robot.info.get("avionics_w", 0.0) + self.spec["power_w"]
         self.pos, self.size = pos, (sx, sy, sz)
 
+    def contribute(self, robot, meta: dict) -> None:
+        meta["power"]["loads"].append({"type": "constant", "group": "avionics", "label": self.part_name,
+                                       "watts": self.spec["power_w"]})
+
     def summary(self) -> str:
         return f"Board: {self.part_name} ({self.spec['mass_g']:.0f} g, {self.spec['power_w']} W)"
 
@@ -48,9 +52,15 @@ class CameraModule(Board):
     kind = "camera"
     material = "lens"
 
-    def __init__(self, part: str, rgb_vfov_deg: float | None = 80, depth_vfov_deg: float | None = 58) -> None:
+    def __init__(self, part: str, rgb: str | None = None, depth: str | None = None) -> None:
+        """rgb / depth: `rgb_camera.*` / `depth_camera.*` sensor parts carried by the module
+        (their datasheets set the field of view and drive the camera error models)."""
         super().__init__(part)
-        self.rgb_vfov, self.depth_vfov = rgb_vfov_deg, depth_vfov_deg
+        self.rgb = parts.get("rgb_camera", rgb) if rgb else None
+        self.depth = parts.get("depth_camera", depth) if depth else None
+        self.rgb_name, self.depth_name = rgb, depth
+        self.rgb_vfov = self.rgb["vfov_deg"] if self.rgb else 80
+        self.depth_vfov = self.depth["vfov_deg"] if self.depth else 58
 
     def attach(self, robot, at) -> None:
         super().attach(robot, at)
@@ -63,5 +73,33 @@ class CameraModule(Board):
                                f'fovy="{self.depth_vfov}"/>')
         self.publish("lens", at.body, lens, at.normal)
 
+    def contribute(self, robot, meta: dict) -> None:
+        super().contribute(robot, meta)
+        for kind, spec, part, cam in (("rgb_camera", self.rgb, self.rgb_name, self.rgb_camera),
+                                      ("depth_camera", self.depth, self.depth_name, self.depth_camera)):
+            if spec:
+                meta["sensors"].append(dict(spec, type=kind, name=self.name, part=part, camera=cam))
+
     def summary(self) -> str:
         return f"CameraModule: {self.part_name} ({self.spec['mass_g']:.0f} g), rgb {self.rgb_vfov} deg, depth {self.depth_vfov} deg"
+
+
+class Computer(Component):
+    """Where the policy runs (`compute.*` part: inference time, rate). Its mass and power are
+    those of the board it runs on (e.g. the camera module or a companion computer), so it
+    adds none; it tells the runtime how late actions arrive."""
+
+    kind = "computer"
+
+    def __init__(self, part: str) -> None:
+        super().__init__()
+        self.part_name, self.spec = part, parts.get("compute", part)
+
+    def attach(self, robot, at) -> None:
+        pass
+
+    def contribute(self, robot, meta: dict) -> None:
+        meta["compute"] = dict(self.spec, part=self.part_name)
+
+    def summary(self) -> str:
+        return f"Computer: {self.part_name}, inference {self.spec['inference_ms']} ms at {self.spec['rate_hz']} Hz"

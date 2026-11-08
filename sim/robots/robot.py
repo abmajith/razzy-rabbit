@@ -32,6 +32,7 @@ class Robot:
         self.contacts: list[str] = []
         self.materials: list[tuple] = []          # (name, rgba, kwargs) registered at write
         self.info: dict = {}                      # runtime facts collected from components
+        self.environment: dict = {}               # site conditions components need (air density, magnetic field)
         self._counts: dict[str, int] = {}
 
     # ------------------------------------------------------------------ assembly ---
@@ -77,6 +78,18 @@ class Robot:
             stack = sorted(b.children, key=lambda c: c.order) + stack
         return out
 
+    def runtime_meta(self) -> dict:
+        """What the runtime needs, collected from the components (`contribute`):
+        power  : {battery, loads: [rotor | gearmotor | constant ...]}   -> runtime/power.py
+        sensors: [ {type, part, datasheet values, site/camera/antenna...} ] -> runtime/sensors.py
+        compute, rotor_drag: when a Computer / Rotors are present."""
+        meta: dict = {"power": {"battery": None, "loads": []}, "sensors": []}
+        for c in self.components:
+            c.contribute(self, meta)
+        if meta["power"]["battery"] is None:
+            del meta["power"]
+        return meta
+
     # ---------------------------------------------------------------- inspection ---
     def mass_properties(self) -> dict:
         """Mass, CoM and inertia of the root body (the vehicle's main body), and total mass
@@ -108,6 +121,23 @@ class Robot:
                  f"  root body '{self.root.name}': {mp['root_mass']:.3f} kg, CoM {fmt(mp['root_com'])} m"]
         for c in self.components:
             lines.append(f"  - {c.name:12s} {c.summary()}")
+        rt = self.runtime_meta()
+        if "power" in rt:
+            pw = rt["power"]
+            loads = []
+            for ld in pw["loads"]:
+                if ld["type"] == "rotor":
+                    loads.append(f"{len(ld['actuators'])} rotors (from thrust)")
+                elif ld["type"] == "gearmotor":
+                    loads.append(f"{len(ld['actuators'])} gearmotors (from torque)")
+            groups: dict = {}
+            for ld in pw["loads"]:
+                if ld["type"] == "constant":
+                    groups[ld["group"]] = groups.get(ld["group"], 0) + ld["watts"]
+            loads += [f"{g} {w:g} W" for g, w in groups.items()]
+            lines.append(f"  power: {pw['battery']['part']} -> " + ", ".join(loads))
+        if rt["sensors"]:
+            lines.append("  sensors: " + ", ".join(f"{e['type']} {e['part']}" for e in rt["sensors"]))
         return "\n".join(lines)
 
     # -------------------------------------------------------------------- output ---

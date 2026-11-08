@@ -4,7 +4,7 @@ The C++ core runs physics, controller, power-train plant, sensors and latency fo
 environments in parallel. Python only builds one config dict per environment at reset
 (from the same scene meta + [uncertainty] draw the Python reference uses) and reads the
 results as numpy arrays. The readable Python reference (sim/runtime.py Sim, sim/control.py,
-sim/design/plant.py, sim/sensing/) stays the specification; tests/sim/test_core.py checks
+sim/runtime/power.py, sim/runtime/sensors.py, sim/sensing/) stays the specification; tests/sim/test_core.py checks
 the C++ core against it.
 
     CoreBatch  N envs, for training / batch evaluation:   reset, act, step, arrays
@@ -23,7 +23,7 @@ from . import uncertainty as U
 from .physics.battery import CHEMISTRY
 from .runtime import Sim, load_terrain, scene_dir
 from .sensing.models import DelayLine, latency_sampler
-from .sensing.suite import FOLIAGE_WORDS
+from .runtime.sensors import FOLIAGE_WORDS, by_type
 from .physics.aero import WindField
 
 MODES = {"mission": 0, "setpoint": 1, "ctrl": 2}
@@ -75,6 +75,19 @@ def _lat(spec_ms) -> dict:
     return {"lat_lo": float(spec_ms) / 1000, "lat_hi": float(spec_ms) / 1000}
 
 
+def _numbers(d: dict) -> dict:
+    """The numeric fields of a spec dict (what the C++ config parser reads)."""
+    return {k: v for k, v in d.items() if isinstance(v, (int, float))}
+
+
+def _constant_groups(power: dict) -> dict:
+    groups: dict = {}
+    for ld in power["loads"]:
+        if ld["type"] == "constant":
+            groups[ld["group"]] = groups.get(ld["group"], 0) + ld["watts"]
+    return groups
+
+
 def _pack(b: dict) -> dict:
     c = CHEMISTRY[b["chemistry"]]
     return {"soc_tab": c["soc"], "ocv_tab": c["ocv"], "cells": b["cells"], "cap_ah": b["capacity_mah"] / 1000,
@@ -113,7 +126,7 @@ class CoreBatch:
             t = self.terrain
             self.core.set_terrain(np.ascontiguousarray(t.z, float), t.half_x, t.half_y)
         robot = self.meta0["robots"][0]
-        if sensors and "gnss" in robot.get("sensors", {}):
+        if sensors and "gnss" in by_type(robot):
             self.core.load_rays(str(folder / "scene.xml"), ray_opacity(folder, None, robot["body"]))
         self.n = n_envs
         self.variants: list[int | None] = [None] * n_envs
@@ -166,53 +179,61 @@ class CoreBatch:
                 wc.update(turbine_hub=list(w.turbine["hub"]), turbine_R=w.turbine["R"], turbine_Ct=w.turbine["Ct"],
                           turbine_k=w.turbine["k"])
             cfg["wind"] = wc
-        p = r.get("plant")
-        if p and p["kind"] == "drone":
-            cfg["dplant"] = {"bid": bid, "dof": free_dof, "act": [m.actuator(a).id for a in r["actuators"]],
-                             "pack": _pack(p["battery"]), "kv": p["motor"]["kv"], "r_ohm": p["motor"]["r_ohm"],
-                             "i0": p["motor"]["i0"], "D": p["prop"]["diameter_in"] * 0.0254, "ct": p["prop"]["ct"],
-                             "cp": p["prop"]["cp"], "rho": p["rho"], "esc_eff": p["esc_eff"],
-                             "avionics_w": p["avionics_w"], "t_max_ref": p["t_max_ref"], "rotor_drag": p["rotor_drag"]}
-        if p and p["kind"] == "rover":
-            n = len(r["drive"])
-            cfg["rplant"] = {"act": [m.actuator(a).id for a in r["drive"]], "pack": _pack(p["battery"]),
-                             "tau_s": np.broadcast_to(np.asarray(p["tau_stall"], float), (n,)).tolist(),
-                             "i0": p["motor"]["no_load_current"], "i_s": p["motor"]["stall_current"] * p["v_ratio"],
-                             "avionics_w": p["avionics_w"], "servo_w": p["servo_w"], "n_servo": len(r["steer"])}
-        sp = r.get("sensors")
-        if self.use_sensors and sp:
-            s = {"gyro_adr": int(m.sensor_adr[m.sensor(f"{name}_gyro").id]),
-                 "acc_adr": int(m.sensor_adr[m.sensor(f"{name}_acc").id]),
-                 "site": m.site(f"{name}_imu").id, "bid": bid, "dof": free_dof, "record": int(self.record)}
-            if "imu" in sp:
-                s["imu"] = {**{k: v for k, v in sp["imu"].items() if isinstance(v, (int, float))}, **_lat(sp["imu"].get("latency_ms", 0))}
-            v = r.get("vibration")
-            if v and "imu" in sp and p:
-                D = p["prop"]["diameter_in"] * 0.0254
+        # power train: the C++ core still has one drone and one rover plant (generic in step 7);
+        # map the component loads onto them, keeping the reference's order of additions
+        pw = r.get("power")
+        if pw:
+            const = [w for w in _constant_groups(pw).values()]
+            rot = [ld for ld in pw["loads"] if ld["type"] == "rotor"]
+            gear = [ld for ld in pw["loads"] if ld["type"] == "gearmotor"]
+            if rot:
+                ld = rot[0]
+                cfg["dplant"] = {"bid": bid, "dof": free_dof, "act": [m.actuator(a).id for a in ld["actuators"]],
+                                 "pack": _pack(pw["battery"]), "kv": ld["motor"]["kv"], "r_ohm": ld["motor"]["r_ohm"],
+                                 "i0": ld["motor"]["i0"], "D": ld["prop"]["diameter_in"] * 0.0254, "ct": ld["prop"]["ct"],
+                                 "cp": ld["prop"]["cp"], "rho": ld["rho"], "esc_eff": ld["esc_eff"],
+                                 "avionics_w": float(sum(const)), "t_max_ref": ld["t_max_ref"],
+                                 "rotor_drag": r.get("rotor_drag", {}).get("rotor_drag", 0.0)}
+            if gear:
+                ld = gear[0]
+                cfg["rplant"] = {"act": [m.actuator(a).id for a in ld["actuators"]], "pack": _pack(pw["battery"]),
+                                 "tau_s": list(map(float, ld["tau_s"])), "i0": ld["motor"]["no_load_current"],
+                                 "i_s": ld["motor"]["stall_current"] * ld["v_ratio"],
+                                 "avionics_w": const[0] if const else 0.0,
+                                 "servo_w": float(sum(const[1:])), "n_servo": 1 if len(const) > 1 else 0}
+        sp = by_type(r)
+        if self.use_sensors and "imu" in sp:
+            imu = sp["imu"]
+            s = {"gyro_adr": int(m.sensor_adr[m.sensor(imu["gyro"]).id]),
+                 "acc_adr": int(m.sensor_adr[m.sensor(imu["acc"]).id]),
+                 "site": m.site(imu["site"]).id, "bid": bid, "dof": free_dof, "record": int(self.record)}
+            s["imu"] = {**_numbers(imu), **_lat(imu.get("latency_ms", 0))}
+            v = imu.get("vibration")
+            if v:
                 s["vib"] = {"rotor_pos": np.asarray(v["rotor_pos"], float).ravel().tolist(), "spin": list(map(float, v["spin"])),
                             "mass": v["mass"], "inertia_inv": np.linalg.inv(np.asarray(v["inertia"], float)).ravel().tolist(),
                             "imbalance_gmm": v["imbalance_gmm"], "thrust_ripple": v["thrust_ripple"], "blades": v["blades"],
                             "arm_hz": v["arm_hz"], "arm_zeta": v.get("arm_zeta", 0.02), "mount_hz": v["mount_hz"],
-                            "mount_zeta": v["mount_zeta"], "rotor_act": [m.actuator(a).id for a in r["actuators"]],
-                            "kn": 1.0 / (p["prop"]["ct"] * p["rho"] * D ** 4)}
+                            "mount_zeta": v["mount_zeta"], "rotor_act": [m.actuator(a).id for a in v["rotor_actuators"]],
+                            "kn": v["kn"]}
             if "baro" in sp:
-                s["baro"] = {**{k: v for k, v in sp["baro"].items() if isinstance(v, (int, float))}, **_lat(sp["baro"].get("latency_ms", 0))}
+                s["baro"] = {**_numbers(sp["baro"]), **_lat(sp["baro"].get("latency_ms", 0))}
             if "mag" in sp:
-                s["mag"] = {**{k: v for k, v in sp["mag"].items() if isinstance(v, (int, float))},
-                            **{k: float(v) for k, v in sp["environment"].items()}, **_lat(sp["mag"].get("latency_ms", 0))}
+                s["mag"] = {**_numbers(sp["mag"]), **{k: float(v) for k, v in sp["mag"]["environment"].items()},
+                            **_lat(sp["mag"].get("latency_ms", 0))}
             if "gnss" in sp:
-                s["gnss"] = {**{k: v for k, v in sp["gnss"].items() if isinstance(v, (int, float))}, **_lat(sp["gnss"]["latency_ms"])}
-                s["antenna"] = [0.0, 0.0, sp.get("installation", {}).get("gnss_antenna_height_m", 0.08)]
+                s["gnss"] = {**_numbers(sp["gnss"]), **_lat(sp["gnss"]["latency_ms"])}
+                s["antenna"] = list(sp["gnss"]["antenna"])
             if "depth_camera" in sp:
                 s["depth"] = {k: (int(v) if isinstance(v, bool) else v) for k, v in sp["depth_camera"].items()
                               if isinstance(v, (int, float))}
             if "rgb_camera" in sp:
                 q = sp["rgb_camera"]
-                s["rgb"] = {**{k: v for k, v in q.items() if isinstance(v, (int, float))},
-                            "exp_lo": q["exposure_ms"][0], "exp_hi": q["exposure_ms"][1], "rolling": int(q.get("shutter") == "rolling")}
+                s["rgb"] = {**_numbers(q), "exp_lo": q["exposure_ms"][0], "exp_hi": q["exposure_ms"][1],
+                            "rolling": int(q.get("shutter") == "rolling")}
             cfg["sensors"] = s
-            if self.mode != "mission" and "compute" in sp:
-                cfg["compute"] = {"rate_hz": sp["compute"]["rate_hz"], **_lat(sp["compute"]["inference_ms"])}
+        if self.mode != "mission" and "compute" in r:
+            cfg["compute"] = {"rate_hz": r["compute"]["rate_hz"], **_lat(r["compute"]["inference_ms"])}
         return cfg
 
     # ------------------------------------------------------------------- control ---
@@ -247,15 +268,17 @@ class CoreBatch:
 
 
 # ============================================================================ CoreSim ===
-class _Plant:
-    def __init__(self, b: CoreBatch, i: int) -> None:
-        self.b, self.i = b, i
+class _Power:
+    """Battery state of one C++ env, with the surface of runtime.power.PowerSystem."""
 
-    soc = property(lambda s: float(s.b.plant[s.i, 0]))
-    v = property(lambda s: float(s.b.plant[s.i, 1]))
-    i_a = property(lambda s: float(s.b.plant[s.i, 2]))
-    power = property(lambda s: float(s.b.plant[s.i, 3]))
-    energy_wh = property(lambda s: float(s.b.plant[s.i, 4]))
+    def __init__(self, b: CoreBatch, i: int) -> None:
+        self.b, self.k = b, i
+
+    soc = property(lambda s: float(s.b.plant[s.k, 0]))
+    v = property(lambda s: float(s.b.plant[s.k, 1]))
+    i = property(lambda s: float(s.b.plant[s.k, 2]))
+    power = property(lambda s: float(s.b.plant[s.k, 3]))
+    energy_wh = property(lambda s: float(s.b.plant[s.k, 4]))
 
     def status(self) -> str:
         return f"battery {self.soc*100:5.1f}%  {self.v:5.2f} V  {self.power:6.1f} W"
@@ -267,22 +290,22 @@ class _Spec:
 
 
 class _Sensors:
-    """Same surface as sensing.suite.SensorSuite (status, report, cameras) on the C++ core."""
+    """Same surface as runtime.sensors.SensorSuite (status, report, cameras) on the C++ core."""
 
     def __init__(self, sim: "CoreSim") -> None:
         self.sim, self.b = sim, sim.batch
-        self.spec = sim.robot["sensors"]
+        self.spec = by_type(sim.robot)
         self.lines = {k: DelayLine() for k in ("depth_camera", "rgb_camera")}
         rng = np.random.default_rng([sim.batch.seed, 0xCA3])
         self.lat = {k: latency_sampler(self.spec[k].get("latency_ms", 0), rng) for k in self.lines if k in self.spec}
         self.next_t = {k: 0.0 for k in self.lines}
         m = sim.m
-        name = sim.robot["body"]
-        self.bid, self.imu_site = m.body(name).id, m.site(f"{name}_imu").id
-        self.gyro_adr = m.sensor_adr[m.sensor(f"{name}_gyro").id]
-        rate = self.spec.get("imu", {}).get("rate_hz", 0)
-        self.imu = _Spec(rate=rate, saturated=0)
-        v = sim.robot.get("vibration")
+        imu = self.spec["imu"]
+        self.bid, self.imu_site = m.body(sim.robot["body"]).id, m.site(imu["site"]).id
+        self.baro_site = m.site(self.spec["baro"]["site"]).id if "baro" in self.spec else None
+        self.gyro_adr = m.sensor_adr[m.sensor(imu["gyro"]).id]
+        self.imu = _Spec(rate=imu.get("rate_hz", 0), saturated=0)
+        v = imu.get("vibration")
         self.vib = _Spec(n=np.zeros(4), blades=v["blades"], arm_hz=v["arm_hz"], mount_hz=v["mount_hz"]) if v else None
 
     @property
@@ -305,7 +328,7 @@ class _Sensors:
         if self.vib is not None:
             parts.append(f"vib {b.vib[0]:4.2f} m/s2")
         if "baro" in self.spec and np.isfinite(b.baro[0, 1]):
-            parts.append(f"baro err {b.baro[0, 1] - float(d.site_xpos[self.imu_site][2]):+5.2f} m")
+            parts.append(f"baro err {b.baro[0, 1] - float(d.site_xpos[self.baro_site][2]):+5.2f} m")
         return " | ".join(parts)
 
     # cameras: rendering stays in Python (mirror scene); the image models run in C++
@@ -341,7 +364,7 @@ class _Sensors:
 
 class CoreSim:
     """One environment on the C++ core, with the same surface the CLI uses from Sim:
-    .m/.d (full visual scene, mirrored every step for rendering), .robot, .meta, .plant,
+    .m/.d (full visual scene, mirrored every step for rendering), .robot, .meta, .power,
     .sensors, .wind (for drawing arrows), step(), reset(variant), draw_wind()."""
 
     engine = "c++"
@@ -360,8 +383,8 @@ class CoreSim:
         self.variant, self.params, self.rejected = variant, self.batch.params[0], self.batch.rejected[0]
         self.meta = self.batch.metas[0]
         self.wind = WindField(self.meta["wind"], self.terrain, self.seed) if "wind" in self.meta else None
-        self.plant = _Plant(self.batch, 0) if "plant" in self.robot else None
-        self.sensors = _Sensors(self) if (self.batch.use_sensors and "sensors" in self.robot) else None
+        self.power = _Power(self.batch, 0) if "power" in self.robot else None
+        self.sensors = _Sensors(self) if (self.batch.use_sensors and "imu" in by_type(self.robot)) else None
         self.ctrls = []
         self._sync()
 

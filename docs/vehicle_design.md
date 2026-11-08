@@ -138,13 +138,14 @@ P_bus = 4·V·I / η_esc + P_avionics     drawn from the battery
 - **Rover actuators:** the DC-motor torque-speed line as an affine MuJoCo actuator, corner
   steering servos, and the differential as an equality constraint (left rocker = −right
   rocker).
-- **Plant** (`sim/design/plant.py`), run every physics step:
-  - computes electrical power from the actual rotor thrusts or wheel torques, integrates
-    state of charge, and sags the voltage
-  - feeds the sag back as lower maximum thrust or torque
-  - adds rotor drag for the drone
+- **Power train** (`sim/runtime/power.py`, generic), run every physics step:
+  - each component declares its electrical load: rotors (power from the actual thrust),
+    gearmotors (from torque), boards and servos (constant draws)
+  - the battery supplies their sum: it integrates state of charge and sags the voltage
+  - the sag is fed back as lower maximum thrust or torque
+  - rotor drag for the drone is applied by `sim/runtime/aero.py`
 
-  Battery state is exposed as `sim.plant.soc`, `.v` and `.power`.
+  Battery state is exposed as `sim.power.soc`, `.v`, `.i` and `.power`.
 
 ## Assumptions and limits (be aware)
 

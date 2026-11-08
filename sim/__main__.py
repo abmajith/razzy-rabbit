@@ -96,9 +96,9 @@ def cmd_view(a):
             if not v.is_running():
                 break
             v.sync()
-            if sim.plant is not None and int(sim.d.time / 5) > last_print:
+            if sim.power is not None and int(sim.d.time / 5) > last_print:
                 last_print = int(sim.d.time / 5)
-                print(f"[sim] t={sim.d.time:6.1f}s  {sim.plant.status()}", flush=True)
+                print(f"[sim] t={sim.d.time:6.1f}s  {sim.power.status()}", flush=True)
                 if sim.sensors is not None:
                     print(f"[sim]            {sim.sensors.status()}", flush=True)
             rest = frame_dt - (time.perf_counter() - t0)
@@ -193,8 +193,8 @@ def cmd_render(a):
             iio.imwrite(out.replace(".mp4", ".png"), img)
     writer.close()
     print(f"wrote {out}  ({nframes} frames, sim {sim.d.time:.1f}s, wall {time.time() - t0:.1f}s)")
-    if sim.plant is not None:
-        print(f"[sim] end of run: {sim.plant.status()}, used {sim.plant.energy_wh:.2f} Wh")
+    if sim.power is not None:
+        print(f"[sim] end of run: {sim.power.status()}, used {sim.power.energy_wh:.2f} Wh")
     if sim.sensors is not None:
         print(f"[sim] sensors: {sim.sensors.status()}")
 
@@ -215,7 +215,7 @@ def _variants_python(a):
             sim.step()
             if i % 25 == 0 and sim.d.time > 4.0:
                 errs.append(getattr(ctl, "err", 0.0))
-                pw.append(sim.plant.power if sim.plant else 0.0)
+                pw.append(sim.power.power if sim.power else 0.0)
                 tilt = max(tilt, float(np.degrees(np.arccos(np.clip(sim.d.xmat[bid][8], -1, 1)))))
         out.append((np.asarray(errs), np.asarray(pw), tilt, sim.rejected, sim.param_vector()))
     return out

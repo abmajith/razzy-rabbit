@@ -62,3 +62,25 @@ def test_hand_built_quad_compiles_and_masses_add_up(tmp_path):
     assert m.nu == 4 and m.sensor("scout_gyro").id >= 0
     # battery sits on the deck, its top mount is above it
     assert bat.mount("top").pos[2] > frame.mount("deck").pos[2]
+
+
+def test_components_declare_power_loads_and_sensors():
+    cfg, d = drone.best("drone_forest.toml")
+    _, meta = quadrotor("uav", cfg, d)
+    loads = meta["power"]["loads"]
+    rot = [ld for ld in loads if ld["type"] == "rotor"]
+    assert len(rot) == 1 and len(rot[0]["actuators"]) == 4            # identical rotors share one load
+    avionics = sum(ld["watts"] for ld in loads if ld["type"] == "constant" and ld["group"] == "avionics")
+    assert avionics == pytest.approx(d.m["avionics_w"])                 # the sizing's avionics budget
+    types = [e["type"] for e in meta["sensors"]]
+    assert sorted(types) == sorted(["imu", "baro", "mag", "gnss", "rgb_camera", "depth_camera"])
+    imu = next(e for e in meta["sensors"] if e["type"] == "imu")
+    assert imu["vibration"]["arm_hz"] == pytest.approx(d.m["arm_freq_hz"]) and len(imu["vibration"]["spin"]) == 4
+    assert meta["compute"]["part"] == cfg["compute"]["part"]
+    cfg, d = rover.best("rover_yard.toml")
+    _, meta = rocker_bogie("rover", cfg, d)
+    loads = meta["power"]["loads"]
+    gear = [ld for ld in loads if ld["type"] == "gearmotor"]
+    assert len(gear) == 1 and len(gear[0]["tau_s"]) == 6
+    servos = [ld for ld in loads if ld["type"] == "constant" and ld["group"] == "servos"]
+    assert len(servos) == 4

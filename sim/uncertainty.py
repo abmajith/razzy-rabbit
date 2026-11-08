@@ -75,7 +75,9 @@ REQUIRE = {
 
 
 def vehicle_kind(robot: dict) -> str:
-    return {"drone": "drone", "rover": "rover"}.get(robot.get("plant", {}).get("kind"), "other")
+    """"drone" if the robot has rotor loads, "rover" if it has wheel gearmotors."""
+    loads = {ld["type"] for ld in robot.get("power", {}).get("loads", [])}
+    return "drone" if "rotor" in loads else ("rover" if "gearmotor" in loads else "other")
 
 
 def check_config(unc: dict, kind: str) -> None:
@@ -170,50 +172,51 @@ def flatten(params: dict) -> tuple[list[str], np.ndarray]:
 
 # ------------------------------------------------------------------------- applying ---
 def apply_meta(meta: dict, params: dict) -> dict:
-    """Randomise the scene meta (plant, sensors, wind, drag). Returns a modified deep copy."""
+    """Randomise the scene meta (power train, sensors, drag, wind). Returns a modified deep copy."""
     meta = copy.deepcopy(meta)
     r = meta["robots"][0]
     g = params.get
-    p = r.get("plant")
-    if p is not None:
-        b = p["battery"]
+    pw = r.get("power")
+    if pw is not None:
+        b = pw["battery"]
         b["capacity_mah"] *= g("battery_capacity", 1.0)
         b["r_cell"] *= g("battery_resistance", 1.0)
-        if p["kind"] == "drone":
-            p["rotor_drag"] *= g("rotor_drag", 1.0)
-        if p["kind"] == "rover":
-            p["tau_stall"] = (p["tau_stall"] * g("drive_torque", 1.0)
-                              * np.asarray(g("drive_gain", np.ones(len(r["drive"]))))).tolist()
+        for load in pw["loads"]:
+            if load["type"] == "gearmotor":
+                load["tau_s"] = (np.asarray(load["tau_s"], float) * g("drive_torque", 1.0)
+                                 * np.asarray(g("drive_gain", np.ones(len(load["tau_s"]))))).tolist()
+    if "rotor_drag" in r:
+        r["rotor_drag"]["rotor_drag"] *= g("rotor_drag", 1.0)
     if "drag_CdA" in r:
         r["drag_CdA"] *= g("body_drag", 1.0)
-    v = r.get("vibration")
-    if v is not None:
-        v["imbalance_gmm"] *= g("prop_imbalance", 1.0)
-        v["mount_hz"] *= g("imu_mount_hz", 1.0)
-        v["arm_hz"] *= g("arm_hz", 1.0)
-        v["mass"] *= g("mass_frac", 1.0)
-    s = r.get("sensors")
-    if s is not None:
-        if "imu" in s:
-            for k in ("gyro_noise_dps_rthz", "accel_noise_ug_rthz"):
-                s["imu"][k] *= g("imu_noise", 1.0)
-            for k in ("gyro_bias_dps", "accel_bias_mg", "gyro_bias_instability_dph", "accel_bias_instability_ug"):
-                s["imu"][k] *= g("imu_bias", 1.0)
-        if "baro" in s:
-            s["baro"]["noise_pa"] *= g("baro_noise", 1.0)
-            s["baro"]["drift_pa"] *= g("baro_drift", 1.0)
-        if "mag" in s:
-            s["mag"]["current_ut_per_a"] = s["mag"].get("current_ut_per_a", 0.0) * g("mag_current", 1.0)
-        if "gnss" in s:
-            if "gnss_foliage" in params:
-                s["gnss"]["foliage_loss"] = params["gnss_foliage"]
-            s["gnss"]["multipath_m"] *= g("gnss_multipath", 1.0)
-        add = g("latency_ms_add", 0.0)
-        for spec in s.values():
-            if isinstance(spec, dict) and "latency_ms" in spec:
-                spec["latency_ms"] = _shift(spec["latency_ms"], add)
-        if "compute" in s:
-            s["compute"]["inference_ms"] = _shift(s["compute"]["inference_ms"], g("compute_ms_add", 0.0))
+    sensors = {e["type"]: e for e in r.get("sensors", [])}
+    imu = sensors.get("imu")
+    if imu is not None:
+        for k in ("gyro_noise_dps_rthz", "accel_noise_ug_rthz"):
+            imu[k] *= g("imu_noise", 1.0)
+        for k in ("gyro_bias_dps", "accel_bias_mg", "gyro_bias_instability_dph", "accel_bias_instability_ug"):
+            imu[k] *= g("imu_bias", 1.0)
+        v = imu.get("vibration")
+        if v is not None:
+            v["imbalance_gmm"] *= g("prop_imbalance", 1.0)
+            v["mount_hz"] *= g("imu_mount_hz", 1.0)
+            v["arm_hz"] *= g("arm_hz", 1.0)
+            v["mass"] *= g("mass_frac", 1.0)
+    if "baro" in sensors:
+        sensors["baro"]["noise_pa"] *= g("baro_noise", 1.0)
+        sensors["baro"]["drift_pa"] *= g("baro_drift", 1.0)
+    if "mag" in sensors:
+        sensors["mag"]["current_ut_per_a"] = sensors["mag"].get("current_ut_per_a", 0.0) * g("mag_current", 1.0)
+    if "gnss" in sensors:
+        if "gnss_foliage" in params:
+            sensors["gnss"]["foliage_loss"] = params["gnss_foliage"]
+        sensors["gnss"]["multipath_m"] *= g("gnss_multipath", 1.0)
+    add = g("latency_ms_add", 0.0)
+    for e in r.get("sensors", []):
+        if "latency_ms" in e:
+            e["latency_ms"] = _shift(e["latency_ms"], add)
+    if "compute" in r:
+        r["compute"]["inference_ms"] = _shift(r["compute"]["inference_ms"], g("compute_ms_add", 0.0))
     w = meta.get("wind")
     if w is not None:
         if "wind_speed" in params:
@@ -230,7 +233,7 @@ def _shift(lat, add: float):
     return max(0.0, lat + add)
 
 
-# everything the applier randomises + what the plants change live (voltage sag rescales
+# everything the applier randomises + what the power train changes live (voltage sag rescales
 # ctrlrange / forcerange), so a reset starts from exactly the nominal model
 MODEL_FIELDS = ("body_mass", "body_inertia", "body_ipos", "geom_friction", "actuator_gainprm",
                 "actuator_biasprm", "actuator_dynprm", "actuator_gear", "actuator_ctrlrange",
@@ -267,7 +270,7 @@ def apply_model(m: mujoco.MjModel, d: mujoco.MjData, robot: dict, params: dict) 
     if kind == "rover":
         act = [m.actuator(a).id for a in robot["drive"]]
         tq = g("drive_torque", 1.0) * np.asarray(g("drive_gain", np.ones(len(act))))
-        m.actuator_gainprm[act, 0] *= tq                   # (the plant rescales this live)
+        m.actuator_gainprm[act, 0] *= tq                   # (the power train rescales this live)
         m.actuator_biasprm[act, 2] *= tq                   # back-EMF slope follows the motor constant
         st = [m.actuator(a).id for a in robot["steer"]]
         m.actuator_gainprm[st, 0] *= g("steer_kp", 1.0)

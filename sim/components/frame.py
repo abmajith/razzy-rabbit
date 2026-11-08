@@ -41,8 +41,11 @@ class QuadFrame(Component):
     kind = "frame"
 
     def __init__(self, arm_tube: str, arm_length: float, prop_d: float, guard_gap: float = 0.0,
-                 frame: str = "frame") -> None:
+                 frame: str = "frame", arm_mode_hz: float = 1e9, arm_zeta: float = 0.02) -> None:
+        """arm_mode_hz: first bending mode of an arm with its motor (from the sizing, physics.beam);
+        arm_zeta: structural damping of the arms (carbon ~0.01-0.03). Both shape IMU vibration."""
         super().__init__()
+        self.arm_mode_hz, self.arm_zeta = arm_mode_hz, arm_zeta
         self.tube = parts.get("arm_tube", arm_tube)
         self.spec = parts.load()[frame]                    # plate, motor mount, wiring fraction
         self.arm_length, self.prop_d, self.guard_gap = arm_length, prop_d, guard_gap
@@ -51,6 +54,7 @@ class QuadFrame(Component):
     def attach(self, robot, at) -> None:
         sp, L = self.spec, self.arm_length
         body = robot.new_body(robot.name, None, (0, 0, 0), inertial="parts", mass_scale=1 + sp["wiring_frac"])
+        robot.info["arm_mode_hz"], robot.info["arm_zeta"] = self.arm_mode_hz, self.arm_zeta
         self.body = body
         plate = sp["center_plate_g"] / 1000
         body.mass_parts.append(MassPart(plate, np.zeros(3), box_inertia(plate, 0.11, 0.08, 0.02), "plate"))

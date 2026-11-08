@@ -14,6 +14,7 @@ pytest.importorskip("razzy_core")
 from sim.core import CoreBatch, CoreSim  # noqa: E402
 from sim.design.common import components  # noqa: E402
 from sim.runtime import Sim  # noqa: E402
+from sim.runtime.sensors import by_type  # noqa: E402
 
 DB = components()
 
@@ -30,9 +31,9 @@ def test_trajectory_and_plant_match_python_reference(scene, variant, tol):
         cb.step(500)
         assert abs(py.d.time - cb.time[0]) < 1e-12
         assert np.abs(py.d.qpos - cb.qpos[0]).max() < tol
-        if py.plant is not None:
-            assert cb.plant[0, 0] == pytest.approx(py.plant.soc, abs=1e-9)
-            assert cb.plant[0, 3] == pytest.approx(py.plant.power, rel=1e-6)
+        if py.power is not None:
+            assert cb.plant[0, 0] == pytest.approx(py.power.soc, abs=1e-9)
+            assert cb.plant[0, 3] == pytest.approx(py.power.power, rel=1e-6)
 
 
 def test_threads_do_not_change_results():
@@ -106,7 +107,7 @@ def test_setpoint_mode_and_compute_latency():
 def test_camera_models_in_cpp():
     sim = CoreSim("forest_grounded", 0)
     su = sim.sensors
-    spec = dict(sim.robot["sensors"]["depth_camera"])
+    spec = dict(by_type(sim.robot)["depth_camera"])
     f = spec["width"] / 2 / math.tan(math.radians(spec["hfov_deg"]) / 2)
     for z in (2.0, 6.0):
         out = sim.batch.core.depth_apply(0, np.full((240, 320), z, np.float32), None)
