@@ -1,7 +1,7 @@
 # Architecture: building robots and scenes from reusable pieces
 
-> **Status: proposal for review.** Nothing here is implemented yet. Mark up anything you
-> want changed. The open questions are collected at the end.
+> **Status: agreed design, not yet implemented.** Decisions taken are recorded in
+> section 9. Implementation follows the migration plan in section 7, one layer per branch.
 
 ## 1. Why restructure
 
@@ -147,18 +147,26 @@ component's `electrical_load()`, and the resulting voltage is fed back to every 
 
 ```python
 robot = Robot("scout")
-frame = robot.add(Frame(arm_tube="cf_8x6", arm_length=0.12, plate="cf_center"))
-for corner, spin in quad_x():                       # 4 mount points + spin directions
-    robot.add(Rotor(motor="m2004_1700kv", prop="p5x3_bi", spin=spin), at=frame.arm_tip(corner))
-robot.add(Battery("lipo_6s_2200"), at=frame.top)
-robot.add(Imu("icm42688p", mount_hz=90, mount_zeta=0.15), at=frame.center)
-robot.add(Gnss("ublox_m10"), at=frame.mast(0.07))
-robot.add(StereoCamera("oakd_lite_stereo"), at=frame.nose)
+frame = robot.add(Frame(arm_tube="cf_8x6", arm_length=0.12, plate="cf_center", layout="quad_x"))
+for arm in frame.arms:                              # "FR", "FL", "RL", "RR", with spin directions
+    robot.add(Rotor(motor="m2004_1700kv", prop="p5x3_bi", spin=arm.spin), at=arm.tip)
+robot.add(Battery("lipo_6s_2200"), at=frame.mount("top"))
+robot.add(Imu("icm42688p", mount_hz=90, mount_zeta=0.15), at=frame.mount("center"))
+robot.add(Gnss("ublox_m10"), at=frame.mount("mast"))
+robot.add(StereoCamera("oakd_lite_stereo"), at=frame.mount("nose"))
 robot.add(Computer("oakd_myriadx"))
 
 robot.summary()      # mass, CoM, inertia, power budget, hover throttle, ...
 robot.mjcf()         # body tree + actuators + sensors, mass properties summed from parts
 ```
+
+**Mounting is by named mount points only.** Every structure component publishes its
+mount points (a name, a position and an orientation on its body): a frame has `center`,
+`top`, `bottom`, `nose`, `mast` and one `tip` per arm; a rocker-bogie has `chassis.*`,
+one `wheel` joint per corner, and so on. `frame.mounts()` lists them. A device can't be
+placed at an arbitrary coordinate. If a new position is needed, the structure component
+gets a new named mount, so geometry stays in one place and stays consistent when the
+optimiser changes sizes (e.g. `arm.tip` moves when the arm gets longer).
 
 **Templates** are plain functions that build a common robot from a few parameters. The
 optimiser explores the parameters; the same function builds the simulated robot:
@@ -166,7 +174,7 @@ optimiser explores the parameters; the same function builds the simulated robot:
 ```python
 quadrotor(motor=..., prop=..., battery=..., tube=..., payload=[...], cage=True) -> Robot
 rocker_bogie(wheel=..., gearmotor=..., battery=..., tube=..., body=...)         -> Robot
-skid_steer(...), rail_trolley_arm(...)
+# later, when needed: skid_steer(...), hexacopter(...), quadplane(...)
 ```
 
 ### 3.5 `world/`: composable environments
@@ -182,8 +190,8 @@ world = (World(seed=3, size=140)
          .lighting(Sun.random()))
 ```
 
-Each feature (`Forest`, `Orchard`, `CropBeds`, `Craters`, `Greenhouse`, `Pond`, `Turbine`...)
-is one class: parameters, placement with its own seeded stream, and geometry through the
+Each feature (`Hills`, `Trail`, `Forest`, `Rocks`, `Logs`, `Grass`, `Craters`, `Lander`, and
+later `Orchard`, `CropBeds`, `Pond`...) is one class: parameters, placement with its own seeded stream, and geometry through the
 existing mesh batching. Features can expose *named regions* (`"trail"`, `"rows"`) that
 others avoid or follow, and that missions use as paths.
 
@@ -224,7 +232,8 @@ def forest_inspection(seed=0):
     return Scene(world, robot, task, uncertainty="drone_forest.toml")
 ```
 
-Today's eight scenes should each shrink to roughly 10–30 lines.
+Only the two grounded scenes are kept: `forest_grounded` (renamed `forest_inspection`)
+and `mars_yard`. Each should shrink to roughly 10–30 lines.
 
 ### 3.8 `design/`: sizing over templates
 
@@ -252,7 +261,7 @@ sensitivity. Works the same on simulated and real logs.
 ## 4. Proposed file layout
 
 ```
-razzy/                    (rename of sim/, see open question 1)
+sim/                      (package name kept)
   parts/        *.toml, __init__.py (get, list)
   physics/      propeller.py dc_motor.py battery.py beam.py vehicle.py aero.py vibration.py noise.py
   components/   base.py frame.py rotor.py wheel_drive.py servo.py battery.py
@@ -278,9 +287,11 @@ razzy/                    (rename of sim/, see open question 1)
 | `design/plant.py` | `runtime/power.py` (generic) + `electrical_load()` in each component |
 | `sensing/models.py` | `physics/noise.py`, `physics/vibration.py` + one component file per sensor |
 | `sensing/suite.py` | `runtime/sensors.py` (iterates sensor components) |
-| `robots.py`, `flora.py`, `terrain.py`, `mesh.py` | `components/` (legacy demo robots via templates), `world/` |
-| `scenes.py` | `scenes/*.py` + `world/features/*.py` |
-| `control.py` | `control/*.py` |
+| `robots.py` (idealised demo robots) | **removed** with the demo scenes |
+| `flora.py`, `terrain.py`, `mesh.py` | `world/` |
+| `scenes.py` | `scenes/forest_inspection.py`, `scenes/mars_yard.py` + `world/features/*.py`; demo scenes **removed** |
+| `custom/pond_survey.py` | **removed**; replaced by the step-8 tutorial written with the new API |
+| `control.py` | `control/*.py` (`RoverSerpentine`, `HarvestSequencer`, `TurbineSpin` removed with their scenes) |
 | `wind.py` | `physics/aero.py` (field) + `world/wind.py` (placement/config) |
 | `uncertainty.py` | `runtime/uncertainty.py`; keys become per component (section 6) |
 | `core.py` + `cpp/core/` | `core/` (component-generic) |
@@ -307,10 +318,10 @@ A new component brings its uncertain parameters along. No central list to edit.
 | step | content | proof nothing broke |
 |---|---|---|
 | 1 | this document | your review |
-| 2 | `parts/` + `physics/` | unit tests per formula; sizing results identical to today |
+| 2 | remove the demo scenes, idealised robots and their controllers; then `parts/` + `physics/` | grounded-scene tests pass; unit tests per formula; sizing results identical to today |
 | 3 | `components/` + `robots/` + templates; quad and rover rebuilt from components | generated mass, inertia and actuators match today's within rounding; existing tests pass |
 | 4 | generic `runtime/power.py` + `runtime/sensors.py` | same battery and sensor results as `DronePlant` / `RoverPlant` / `SensorSuite` |
-| 5 | `world/` features + scenes as compositions | same scenes, rendered side by side; tests pass |
+| 5 | `world/` features + the two scenes as compositions | same scenes, rendered side by side; tests pass |
 | 6 | `control/` interface + chains | same trajectories as today's controllers |
 | 7 | C++ core made component-generic | equivalence tests against the Python reference (as now) |
 | 8 | tutorial: "a new robot and scene in 30 lines" | you write one |
@@ -329,16 +340,15 @@ same step. No step changes more than one layer.
 7. `runtime/sim.py`: how one step runs.
 8. `scenes/forest_inspection.py`: how it all composes.
 
-## 9. Open questions for you
+## 9. Decisions
 
-1. **Package name:** rename `sim/` to `razzy/`? (`import razzy.components as rc`)
-   Or keep `sim/`?
-2. **Mounting style:** named mount points (`at=frame.top`, `frame.arm_tip("FR")`) as shown,
-   or explicit coordinates (`at=(x, y, z)`), or both?
-3. **Scenes as code or data:** Python functions as proposed, or also a TOML/YAML scene
-   format for scenes that need no custom logic?
-4. **Legacy demo scenes** (`orchard_uav`, `crop_rover`, `greenhouse`, `wind_turbine`, using the
-   older idealised robots): migrate all of them, or keep only the grounded ones
-   (`forest_grounded`, `mars_yard`) plus whatever you want next?
-5. **Priority:** after step 3, is the order world → control → C++ right for what you want to
-   explore first?
+| question | decision |
+|---|---|
+| package name | **keep `sim/`** (`import sim.components as sc`) |
+| mounting style | **named mount points only** (section 3.4) |
+| which scenes | **only the grounded ones**: `forest_grounded` → `forest_inspection`, and `mars_yard`. The demo scenes (`orchard_uav`, `crop_rover`, `forest_trail`, `greenhouse`, `wind_turbine`, custom `pond_survey`), the idealised robots in `robots.py` and their controllers are removed at the start of step 2 (they stay in git history) |
+| scenes as code or data | open. **Default: Python functions only**; a data format can be added later if scenes turn out to need no logic |
+| order after step 3 | open. **Default: as in section 7** (power/sensors → world → control → C++) |
+
+The analytic wind field keeps its tower/trunk and turbine-wake terms in `physics/aero.py`;
+they're generic physics, even though no remaining scene uses the turbine.
