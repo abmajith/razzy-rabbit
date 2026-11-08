@@ -34,3 +34,32 @@ min_arm_freq_hz = 80             # first bending mode of an arm with motor at th
 
 [objective]
 maximize = "endurance"     # "endurance" | "twr" | "min_mass"
+
+[sensors]
+# parts from components.toml; delete a line to fly without that sensor
+imu = "icm42688p"
+baro = "bmp390"
+mag = "ist8310"
+gnss = "ublox_m10"
+depth_camera = "oakd_lite_stereo"
+rgb_camera = "oakd_lite_rgb"
+
+[installation]
+# how the parts are mounted; these change the data as much as the parts do
+imu_mount_hz = 90             # flight-controller soft mount natural frequency (1e4 = hard mounted)
+imu_mount_zeta = 0.15         # damping of that mount (rubber ~0.1-0.2)
+arm_zeta = 0.02               # structural damping of the arms (carbon ~0.01-0.03)
+prop_imbalance_gmm = 0.5      # residual imbalance per motor+prop [g mm]; balanced 5in ~0.2-1
+thrust_ripple = 0.03          # blade-pass thrust ripple, fraction of rotor thrust
+baro_static_cp = 0.3          # static-port pressure error coefficient (airspeed -> altitude error)
+mag_current_ut_per_a = 0.15   # field at the compass per amp of battery current
+gnss_antenna_height_m = 0.07  # antenna above the CoM
+
+[environment]
+# Earth magnetic field at the flying site (look it up: NOAA/BGS WMM calculator)
+field_ut = 47.5
+inclination_deg = 62
+declination_deg = 2.5
+
+[compute]
+part = "oakd_myriadx"         # where the policy runs (components.toml [compute.*])

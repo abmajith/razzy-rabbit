@@ -106,6 +106,16 @@ uv run --extra sim python -m sim view mars_yard --rebuild
 ```
 Details, models and how to add parts: **[docs/vehicle_design.md](docs/vehicle_design.md)**.
 
+### Grounded sensors, latency and compute
+The designed vehicles carry real sensor specs (IMU, baro, compass, GNSS, stereo depth,
+rolling-shutter RGB, policy compute latency), chosen by part name in the mission file:
+```bash
+uv run --extra sim python -m sim sensors forest_grounded --seconds 60   # error report vs truth
+uv run --extra sim python -m sim render forest_grounded                 # insets = what the drone receives
+```
+Models, datasheet fields and how to fit them to your real hardware:
+**[docs/sensor_models.md](docs/sensor_models.md)**.
+
 ### C++ batched rollouts
 ```bash
 cmake -S sim/cpp -B sim/cpp/build && cmake --build sim/cpp/build -j

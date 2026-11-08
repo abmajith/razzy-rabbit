@@ -323,5 +323,7 @@ def to_mjcf(b, name: str, pos, design: RoverDesign, cfg: dict, yaw: float = 0.0)
                 design=dict(label=design.label, metrics=m),
                 plant=dict(kind="rover", motor=motor, battery=db["battery"][design.battery], v_ratio=ratio,
                            tau_stall=tau_s, avionics_w=bd["avionics_w"], servo_w=servo["power_w"]))
+    from ..sensing.suite import resolve
+    meta["sensors"] = resolve(cfg, db)
     b.meta.setdefault("robots", []).append(meta)
     return meta
