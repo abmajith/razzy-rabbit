@@ -1,0 +1,36 @@
+# Mission spec for the forest-inspection quadrotor.
+# Edit numbers here, then:  uv run --extra sim python -m sim design drone
+# Every requirement is a hard constraint; the objective ranks the feasible designs.
+
+[mission]
+name = "forest inspection quad"
+max_span_m = 0.42          # tip-to-tip incl. cage. Dense forest gaps ~1.5 m -> keep well below
+min_twr = 2.5              # thrust-to-weight at END of discharge (agility + wind margin)
+min_endurance_min = 10     # usable flight time, after the reserve below
+reserve_frac = 0.25        # battery fraction never planned for use (return / landing margin)
+maneuver_factor = 1.25     # mean power / hover power (forward flight, avoidance, climbs)
+max_hover_throttle = 0.45  # hover thrust / max thrust at nominal voltage
+air_density = 1.20         # kg/m^3 (1.225 sea level 15 C; lower when hot or high)
+gravity = 9.81
+cage = true                # protective cage around props (collision tolerant, heavier)
+
+[payload]
+# fixed items from [avionics.*] in components.toml
+items = ["fc_stack_h7", "gnss_m10", "lora_868", "oakd_lite", "pi_zero2w"]
+extra_mass_g = 0           # anything else you carry (sensors, mounts)
+
+[design_space]
+# "all" or a list of names from components.toml
+motors = "all"
+props = "all"
+batteries = "all"
+arm_tubes = "all"
+prop_clearance = 0.15      # gap between adjacent prop tips, fraction of prop diameter
+min_arm_m = 0.07           # arms can't be shorter than the centre stack needs
+
+[structure]
+max_arm_deflection_frac = 0.01   # arm tip deflection at max thrust / arm length
+min_arm_freq_hz = 80             # first bending mode of an arm with motor at the tip
+
+[objective]
+maximize = "endurance"     # "endurance" | "twr" | "min_mass"

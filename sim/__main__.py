@@ -5,6 +5,8 @@
   view   <scene> [--seed N] [--wind]    interactive viewer, reference controller running
   render <scene> [--seed N] [--seconds S] [--wind]
                                         headless MP4: chase view + onboard RGB + depth insets
+  design drone|rover [--config FILE] [--top N]
+                                        size a vehicle from a mission file (sim/design/configs)
 """
 from __future__ import annotations
 
@@ -41,6 +43,16 @@ def cmd_build(a):
         print(f"{n:14s} -> {p}  ({time.time() - t:.1f}s)")
 
 
+def cmd_design(a):
+    from .design import drone, rover
+    mod = {"drone": drone, "rover": rover}[a.vehicle]
+    config = a.config or {"drone": "drone_forest.toml", "rover": "rover_yard.toml"}[a.vehicle]
+    cfg, designs = mod.optimize(config)
+    print(mod.report(cfg, designs, top=a.top))
+    scene = {"drone": "forest_grounded", "rover": "mars_yard"}[a.vehicle]
+    print(f"\nsee it:  uv run --extra sim python -m sim view {scene} --rebuild")
+
+
 def cmd_view(a):
     from . import gpu
     print(f"[sim] viewer GPU: {gpu.select('glfw')}", flush=True)
@@ -74,6 +86,8 @@ def cmd_view(a):
             if not v.is_running():
                 break
             v.sync()
+            if sim.plant is not None and int(sim.d.time / 5) != int((sim.d.time - frame_dt) / 5):
+                print(f"[sim] t={sim.d.time:6.1f}s  {sim.plant.status()}", flush=True)
             rest = frame_dt - (time.perf_counter() - t0)
             if rest > 0:
                 time.sleep(rest)
@@ -131,6 +145,8 @@ def cmd_render(a):
             iio.imwrite(out.replace(".mp4", ".png"), img)
     writer.close()
     print(f"wrote {out}  ({nframes} frames, sim {sim.d.time:.1f}s, wall {time.time() - t0:.1f}s)")
+    if sim.plant is not None:
+        print(f"[sim] end of run: {sim.plant.status()}, used {sim.plant.energy_wh:.2f} Wh")
 
 
 def main(argv=None):
@@ -152,8 +168,13 @@ def main(argv=None):
             s.add_argument("--width", type=int, default=1280)
             s.add_argument("--camera", default=None)
             s.add_argument("--out", default=None)
+    s = sub.add_parser("design", help="size a vehicle from its mission file")
+    s.add_argument("vehicle", choices=["drone", "rover"])
+    s.add_argument("--config", default=None, help="mission TOML (default: drone_forest / rover_yard)")
+    s.add_argument("--top", type=int, default=8)
     a = p.parse_args(argv)
-    {"list": cmd_list, "build": cmd_build, "view": cmd_view, "render": cmd_render}[a.cmd](a)
+    {"list": cmd_list, "build": cmd_build, "view": cmd_view, "render": cmd_render,
+     "design": cmd_design}[a.cmd](a)
 
 
 if __name__ == "__main__":

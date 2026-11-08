@@ -65,6 +65,7 @@ class Builder:
     actuators: list[str] = field(default_factory=list)
     sensors: list[str] = field(default_factory=list)
     contacts: list[str] = field(default_factory=list)
+    equalities: list[str] = field(default_factory=list)
     meta: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -157,6 +158,9 @@ class Builder:
   <contact>
     {chr(10).join('    ' + c for c in self.contacts).strip()}
   </contact>
+  <equality>
+    {chr(10).join('    ' + e for e in self.equalities).strip()}
+  </equality>
   <actuator>
     {chr(10).join('    ' + a for a in self.actuators).strip()}
   </actuator>

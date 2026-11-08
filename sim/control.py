@@ -37,11 +37,11 @@ class QuadController:
         self.mass = float(m.body_subtreemass[self.bid])
         self.J = m.body_inertia[self.bid].copy()
         A = np.zeros((4, 4))
+        com = m.body_ipos[self.bid]                 # torques act about the centre of mass
         for i, aid in enumerate(self.act):
-            x, y, _ = m.site_pos[m.actuator_trnid[aid, 0]]
+            x, y, _ = m.site_pos[m.actuator_trnid[aid, 0]] - com
             A[:, i] = [1.0, y, -x, m.actuator_gear[aid, 5]]
         self.Ainv = np.linalg.inv(A)
-        self.fmax = m.actuator_ctrlrange[self.act, 1]
         self.kp, self.kd, self.kR, self.kW = 5.0, 4.0, 140.0, 22.0
 
     @property
@@ -76,7 +76,8 @@ class QuadController:
         eR = np.array([E[2, 1], E[0, 2], E[1, 0]])
         tau = self.J * (-self.kR * eR - self.kW * w) + np.cross(w, self.J * w)
         T = F @ R[:, 2]
-        d.ctrl[self.act] = np.clip(self.Ainv @ np.r_[T, tau], 0, self.fmax)
+        fmax = self.m.actuator_ctrlrange[self.act, 1]   # live: battery sag lowers it
+        d.ctrl[self.act] = np.clip(self.Ainv @ np.r_[T, tau], 0, fmax)
 
 
 class QuadMission:
@@ -306,6 +307,66 @@ class HarvestSequencer:
             self._plan(self.NEXT[self.state])
 
 
+class RoverAckermann:
+    """Pure pursuit around a closed waypoint loop with 4-wheel Ackermann steering.
+
+    Each steered wheel at (x_i, y_i) gets  delta_i = atan2(x_i k, 1 - y_i k)  and every wheel
+    the speed  v * |(1 - y_i k, x_i k)| / r  for path curvature k. Wheel speeds are tracked
+    with a PI loop around the DC-motor feed-forward  u = omega / omega_0.
+    """
+
+    def __init__(self, sim, meta: dict) -> None:
+        self.sim = sim
+        m = sim.m
+        r = meta["robots"][0]
+        self.bid = m.body(r["body"]).id
+        self.drive = np.array([m.actuator(a).id for a in r["drive"]])
+        self.jdof = np.array([m.jnt_dofadr[m.joint(f"{w}_j").id] for w in r["wheels"]])
+        self.wxy = np.array(r["wheel_xy"])
+        self.steer = np.array([m.actuator(f"{s}_p").id for s in r["steer_xy"]])
+        self.sxy = np.array(list(r["steer_xy"].values()))
+        self.rw, self.w0 = r["wheel_radius"], r["omega0"]
+        self.v = meta.get("speed", 0.5)
+        wp = np.array(meta["waypoints"], float)
+        pts = []
+        for a, b in zip(wp, np.roll(wp, -1, axis=0)):          # densify the closed loop
+            n = max(2, int(np.linalg.norm(b - a) / 0.2))
+            pts += [a + (b - a) * k / n for k in range(n)]
+        self.P = np.array(pts)
+        self.idx = int(np.argmin(np.linalg.norm(self.P - sim.d.xpos[self.bid][:2], axis=1)))
+        self.integ = np.zeros(len(self.drive))
+        kmax = np.tan(np.radians(38)) / np.max(np.abs(self.sxy[:, 0]))
+        self.kmax = kmax / (1 + kmax * np.max(np.abs(self.sxy[:, 1])))
+        self.laps = 0
+
+    def update(self, t: float, dt: float) -> None:
+        d = self.sim.d
+        p = d.xpos[self.bid][:2]
+        R = d.xmat[self.bid].reshape(3, 3)
+        yaw = np.arctan2(R[1, 0], R[0, 0])
+        n = len(self.P)
+        win = (self.idx + np.arange(60)) % n
+        k = int(np.argmin(np.linalg.norm(self.P[win] - p, axis=1)))
+        if self.idx + k >= n:
+            self.laps += 1
+        self.idx = (self.idx + k) % n
+        Ld, j = 1.2, self.idx
+        for _ in range(n):
+            if np.linalg.norm(self.P[j] - p) >= Ld:
+                break
+            j = (j + 1) % n
+        tgt = self.P[j]
+        alpha = (np.arctan2(tgt[1] - p[1], tgt[0] - p[0]) - yaw + np.pi) % (2 * np.pi) - np.pi
+        kappa = float(np.clip(2 * np.sin(alpha) / Ld, -self.kmax, self.kmax))
+        v = self.v * (1.0 if abs(alpha) < 0.6 else 0.4)
+        d.ctrl[self.steer] = np.arctan2(self.sxy[:, 0] * kappa, 1 - self.sxy[:, 1] * kappa)
+        w_t = v * np.hypot(1 - self.wxy[:, 1] * kappa, self.wxy[:, 0] * kappa) / self.rw
+        w = d.qvel[self.jdof]
+        e = (w_t - w) / self.w0
+        self.integ = np.clip(self.integ + 3.0 * e * dt, -0.6, 0.6)
+        d.ctrl[self.drive] = np.clip(w_t / self.w0 + 1.5 * e + self.integ, -1, 1)
+
+
 class TurbineSpin:
     def __init__(self, sim, meta):
         self.sim, self.speed = sim, meta.get("rotor_speed", 1.5)
@@ -316,4 +377,4 @@ class TurbineSpin:
 
 
 CONTROLLERS = {"quad_waypoints": QuadMission, "rover_serpentine": RoverSerpentine,
-               "harvest": HarvestSequencer}
+               "harvest": HarvestSequencer, "rover_ackermann": RoverAckermann}

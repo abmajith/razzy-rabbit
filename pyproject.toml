@@ -2,7 +2,7 @@
 name = "razzy-rabbit"
 version = "0.1.0"
 description = "Robotics design and simulation suite"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "pyvista[all]",
     "pyvistaqt",

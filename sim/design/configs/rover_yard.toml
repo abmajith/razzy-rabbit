@@ -1,0 +1,39 @@
+# Mission spec for the six-wheel rocker-bogie rover (Mars-rover style suspension).
+# Edit numbers here, then:  uv run --extra sim python -m sim design rover
+
+[mission]
+name = "rocker-bogie field rover"
+payload_kg = 3.0           # sensors, arm, samples...
+max_slope_deg = 20         # must climb and not tip on this slope
+obstacle_height_m = 0.15   # step/rock the rover must climb
+cruise_speed_mps = 0.6
+min_range_km = 3.0         # on flat terrain at cruise speed, after the reserve
+reserve_frac = 0.2
+terrain_crr = 0.08         # rolling resistance: 0.02 hard floor, 0.06-0.10 grass/packed soil, 0.15-0.3 loose sand
+terrain_mu = 0.6           # traction coefficient (peak tractive force / normal force)
+max_width_m = 0.95
+max_length_m = 1.3
+min_clearance_m = 0.18     # ground clearance under the body
+tip_margin_deg = 10        # static tip-over angle must exceed max_slope by this much
+climb_factor = 1.5         # rocker-bogie climbs obstacles up to climb_factor x wheel radius
+gravity = 9.81             # 3.71 for Mars
+
+[body]
+length_m = 0.50
+width_m = 0.32
+height_m = 0.16
+electronics_g = 1200       # computer, motor drivers, sensors, wiring
+avionics_w = 12            # continuous electrical load besides the drive motors
+steer_servo = "servo_35kg" # 4 corner-steering servos (Curiosity / Perseverance style)
+
+[design_space]
+wheels = "all"
+drive_motors = "all"
+batteries = ["liion_3s4p_14000", "liion_6s2p_7000", "liion_6s4p_14000", "lifepo4_4s_20000"]
+tubes = "all"
+
+[structure]
+max_tube_stress_mpa = 60   # bending stress in a rocker leg at 2 g vertical load (Al 6061 yield ~240)
+
+[objective]
+maximize = "range"         # "range" | "min_mass"

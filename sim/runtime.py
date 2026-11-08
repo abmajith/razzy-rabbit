@@ -47,6 +47,11 @@ class Sim:
             self.ctrls.append(CONTROLLERS[self.meta["controller"]](self, self.meta))
         if "rotor_speed" in self.meta:
             self.ctrls.append(TurbineSpin(self, self.meta))
+        self.plant = None
+        if "plant" in self.robot:          # designed vehicle: battery + motor model, runs last
+            from .design.plant import make_plant
+            self.plant = make_plant(self, self.robot)
+            self.ctrls.append(self.plant)
 
     @property
     def robot(self) -> dict:
